@@ -175,6 +175,12 @@ class AutoPainterGUI(QMainWindow):
         self.calib_status_label = QLabel("")
         calib_layout.addWidget(self.calib_status_label)
 
+        self.recalib_btn = QPushButton("🗑 清除标定（重新标定）")
+        self.recalib_btn.setToolTip("清除已保存的标定数据，可以重新标定画布和调色板")
+        self.recalib_btn.clicked.connect(self._clear_calibration)
+        self.recalib_btn.setEnabled(False)
+        calib_layout.addWidget(self.recalib_btn)
+
         main_layout.addWidget(calib_group)
 
         # --- 3. 画画控制 ---
@@ -437,6 +443,25 @@ class AutoPainterGUI(QMainWindow):
             parts.append("调色板 X")
 
         self.calib_status_label.setText("标定状态: " + "  |  ".join(parts))
+
+        # 有任何一项标定了就可以清除
+        self.recalib_btn.setEnabled(self.locator.calibrated or self.navigator.calibrated)
+
+    def _clear_calibration(self):
+        """清除所有标定数据"""
+        self.locator.calibrated = False
+        self.navigator.calibrated = False
+
+        # 删除保存的标定文件
+        if os.path.exists(CALIBRATION_FILE):
+            try:
+                os.remove(CALIBRATION_FILE)
+            except Exception:
+                pass
+
+        self._update_calib_status()
+        self._check_ready()
+        self._log("[OK] 标定数据已清除，请重新标定画布和调色板")
 
     # ===== 画画控制 =====
 
