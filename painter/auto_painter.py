@@ -162,8 +162,8 @@ class AutoPainterGUI(QMainWindow):
         calib_group = QGroupBox("2. 坐标标定（在游戏中操作）")
         calib_layout = QVBoxLayout(calib_group)
 
-        self.calib_canvas_btn = QPushButton("标定画板范围（左上角 -> 右下角，共 2 次 Enter）")
-        self.calib_canvas_btn.setToolTip("点击后切回游戏，鼠标移到画布左上角第一格中心按 Enter，再移到右下角最后一格中心按 Enter")
+        self.calib_canvas_btn = QPushButton("标定画板范围（4 个角，共 4 次 Enter）")
+        self.calib_canvas_btn.setToolTip("点击后切回游戏，按 Z 字形依次标定左上→右上→左下→右下四个角")
         self.calib_canvas_btn.clicked.connect(self._start_canvas_calibration)
         calib_layout.addWidget(self.calib_canvas_btn)
 
@@ -319,24 +319,43 @@ class AutoPainterGUI(QMainWindow):
             return
 
         self.calib_canvas_btn.setEnabled(False)
-        self._log("--- 开始标定画布 ---")
-        self._log("请切到游戏，鼠标停在【左上角第一格】中心，按 Enter")
+        self._log("--- 开始标定画布（4 角）---")
+        self._log("(1/4) 请切到游戏，鼠标停在【左上角第一格】中心，按 Enter")
 
         def _thread():
+            # 1. 左上角
             self._wait_for_enter()
-            p1 = self._mouse_getter.position()
-            self.signals.log_msg.emit(f"  [OK] 左上角: {p1}")
+            tl = self._mouse_getter.position()
+            self.signals.log_msg.emit(f"  [OK] 左上角: {tl}")
             time.sleep(0.3)
-            self.signals.log_msg.emit("鼠标停在【右下角最后一格】中心，按 Enter")
 
+            # 2. 右上角
+            self.signals.log_msg.emit("(2/4) 鼠标停在【右上角最后一格】中心，按 Enter")
             self._wait_for_enter()
-            p2 = self._mouse_getter.position()
-            self.signals.log_msg.emit(f"  [OK] 右下角: {p2}")
+            tr = self._mouse_getter.position()
+            self.signals.log_msg.emit(f"  [OK] 右上角: {tr}")
+            time.sleep(0.3)
+
+            # 3. 左下角
+            self.signals.log_msg.emit("(3/4) 鼠标停在【左下角第一格】中心，按 Enter")
+            self._wait_for_enter()
+            bl = self._mouse_getter.position()
+            self.signals.log_msg.emit(f"  [OK] 左下角: {bl}")
+            time.sleep(0.3)
+
+            # 4. 右下角
+            self.signals.log_msg.emit("(4/4) 鼠标停在【右下角最后一格】中心，按 Enter")
+            self._wait_for_enter()
+            br = self._mouse_getter.position()
+            self.signals.log_msg.emit(f"  [OK] 右下角: {br}")
 
             self.locator.calibrate(
                 self.pixel_data.grid_width,
                 self.pixel_data.grid_height,
-                p1, p2
+                top_left=tl,
+                bottom_right=br,
+                top_right=tr,
+                bottom_left=bl,
             )
             self._save_calibration()
             self.signals.calibration_done.emit("画布")
