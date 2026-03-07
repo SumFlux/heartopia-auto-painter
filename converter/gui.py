@@ -355,7 +355,7 @@ class HeartopiaGUI(QMainWindow):
         if not self.converter:
             return
         
-         _ = QFileDialog.getSaveFileName(
+        file_path, _ = QFileDialog.getSaveFileName(
             self,
             "保存 CSV",
             f"{Path(self.image_path).stem}_heartopia.csv",
