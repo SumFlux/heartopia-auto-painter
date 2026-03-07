@@ -316,7 +316,7 @@ class HeartopiaGUI(QMainWindow):
         total_pixels = 0
         
         for row in self.pixel_grid:
-            focolor in row:
+            for color in row:
                 if color != '#FFFFFF':
                     color_count[color] = color_count.get(color, 0) + 1
                     total_pixels += 1
