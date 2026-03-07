@@ -7,6 +7,10 @@ Heartopia Painting Tools - GUI 版本
 import sys
 import os
 from pathlib import Path
+
+# 添加项目根目录到 sys.path，以便导入 shared 模块
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QComboBox, QFileDialog, QMessageBox,

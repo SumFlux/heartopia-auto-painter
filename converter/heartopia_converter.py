@@ -8,10 +8,16 @@ Heartopia Painting Tools - Python 版本
 
 import json
 import sys
+import os
 import math
 from PIL import Image
 import numpy as np
 from typing import List, Tuple, Dict, Optional
+
+# 添加项目根目录到 sys.path，以便导入 shared 模块
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from shared.palette import PALETTE_RGB, COLOR_ID_MAP, hex_to_rgb, find_closest_color
 
 
 class HeartopiaPixelArt:
@@ -23,36 +29,6 @@ class HeartopiaPixelArt:
         '3:4': [[24, 30], [38, 50], [76, 100], [114, 150]],
         '9:16': [[18, 30], [28, 50], [56, 100], [84, 150]]
     }
-
-    # 13 组，共 126 种心动小镇原版调色盘精选颜色（来自实际截图取色）
-    HEARTOPIA_COLORS = [
-        # 组1 - 黑白灰 (6色)
-        '#051616', '#434747', '#828484', '#b9b7b6', '#e0dbd9', '#a8978e',
-        # 组2 - 红色系 (10色)
-        '#cf354d', '#ee6f72', '#a6263d', '#f5ada8', '#ca8988', '#9f6d6b', '#7b5859', '#9c857e', '#8c746c', '#75584d',
-        # 组3 - 橙红色系 (10色)
-        '#e95e2b', '#f98358', '#ab4226', '#feba9f', '#d9947d', '#af7868', '#825951', '#b09a92', '#998179', '#795e54',
-        # 组4 - 橙色系 (10色)
-        '#f49e16', '#feae3b', '#b16f16', '#fece92', '#daa76c', '#b3814b', '#7a542c', '#f5e4cf', '#c1b0a1', '#88776b',
-        # 组5 - 黄色系 (10色)
-        '#edca16', '#f9d838', '#b39416', '#fae792', '#d3bf74', '#a89460', '#827150', '#a59282', '#8f796c', '#765a4f',
-        # 组6 - 黄绿色系 (10色)
-        '#a9bd20', '#b3bf50', '#818745', '#a29575', '#8f8067', '#775c50', '#75584d', '#75584d', '#75584d', '#74574c',
-        # 组7 - 绿色系 (10色)
-        '#05a25d', '#41b97b', '#057447', '#9edaaf', '#81b694', '#6c8772', '#646a5d', '#918478', '#7f685e', '#75584d',
-        # 组8 - 青绿色系 (10色)
-        '#058781', '#05aba0', '#056966', '#82cec3', '#65aaa3', '#5b7f79', '#5d6662', '#8d8178', '#7e685e', '#75584d',
-        # 组9 - 青色系 (10色)
-        '#05729c', '#0599ba', '#055878', '#79bbca', '#5193a5', '#2d7082', '#235767', '#b8c3c4', '#969998', '#796c66',
-        # 组10 - 蓝色系 (10色)
-        '#055ea6', '#2b83c1', '#054782', '#84a8c9', '#6283a3', '#556c85', '#525c68', '#9b908e', '#887671', '#775c52',
-        # 组11 - 蓝紫色系 (10色)
-        '#534da1', '#7577bd', '#3e387e', '#a2a0c7', '#787aa1', '#5c5d82', '#4c4e67', '#b5afb3', '#958989', '#7b6762',
-        # 组12 - 紫色系 (10色)
-        '#813d8b', '#a167a9', '#602c6c', '#ba9fbb', '#98809b', '#7d6674', '#715e60', '#89716a', '#795e54', '#75584d',
-        # 组13 - 粉色系 (10色)
-        '#ad356f', '#cf6b8f', '#862658', '#d9a3b5', '#b88594', '#8f6771', '#795e61', '#98827c', '#82685f', '#75584d'
-    ]
 
     def __init__(self, ratio: str = '1:1', level: int = 2):
         """
@@ -70,61 +46,13 @@ class HeartopiaPixelArt:
         self.grid_width, self.grid_height = self.GRID_DIMENSIONS[ratio][level]
         self.pixel_grid: List[List[str]] = []
 
-        # 预计算调色板 RGB 值（使用 int 类型，避免 uint8 溢出）
-        self._palette_rgb = []
-        self._hex_to_id = {}
-        for i, hex_color in enumerate(self.HEARTOPIA_COLORS):
-            # 组号推算：
-            # 组 1 = index 0~5
-            # 组 2~13 = 每个10个
-            if i < 6:
-                group_idx = 0
-                color_idx = i
-            else:
-                group_idx = (i - 6) // 10 + 1
-                color_idx = (i - 6) % 10
-                
-            color_id = f"{group_idx}-{color_idx}"
-            r, g, b = self._hex_to_rgb(hex_color)
-            
-            self._palette_rgb.append((r, g, b, hex_color))
-            self._hex_to_id[hex_color] = color_id
-
-    @staticmethod
-    def _hex_to_rgb(hex_color: str) -> Tuple[int, int, int]:
-        """十六进制颜色转 RGB（返回 Python int，不是 numpy uint8）"""
-        hex_color = hex_color.lstrip('#')
-        return (
-            int(hex_color[0:2], 16),
-            int(hex_color[2:4], 16),
-            int(hex_color[4:6], 16)
-        )
-
-    @staticmethod
-    def _rgb_to_hex(r: int, g: int, b: int) -> str:
-        """RGB 转十六进制颜色"""
-        return f'#{r:02x}{g:02x}{b:02x}'
-
     def _find_closest_color(self, r: int, g: int, b: int) -> str:
         """
         找到最接近的游戏颜色（欧几里得 RGB 距离）
         注意：所有参数必须是 Python int，不能是 numpy uint8
         """
-        min_distance = float('inf')
-        closest_color = self._palette_rgb[0][3]
-
-        for pr, pg, pb, hex_color in self._palette_rgb:
-            # 使用 Python 原生 int 运算，避免 numpy uint8 溢出
-            dr = r - pr
-            dg = g - pg
-            db = b - pb
-            distance = dr * dr + dg * dg + db * db  # 不需要 sqrt，比较用平方距离即可
-
-            if distance < min_distance:
-                min_distance = distance
-                closest_color = hex_color
-
-        return closest_color
+        hex_color, _ = find_closest_color(r, g, b)
+        return hex_color
 
     def _center_crop(self, img: Image.Image) -> Image.Image:
         """
@@ -191,7 +119,7 @@ class HeartopiaPixelArt:
                 color_hex = self._find_closest_color(r, g, b)
                 row.append(color_hex)
 
-                pr, pg, pb = self._hex_to_rgb(color_hex)
+                pr, pg, pb = hex_to_rgb(color_hex)
                 err = np.array([r - pr, g - pg, b - pb], dtype=np.float32)
 
                 # Floyd-Steinberg 误差扩散
@@ -264,7 +192,7 @@ class HeartopiaPixelArt:
         for y in range(height):
             for x in range(width):
                 hex_color = self.pixel_grid[y][x]
-                r, g, b = self._hex_to_rgb(hex_color)
+                r, g, b = hex_to_rgb(hex_color)
                 rgb_array[y, x] = [r, g, b]
 
         # 如果需要放大，使用最近邻插值
@@ -305,7 +233,7 @@ class HeartopiaPixelArt:
         for y in range(self.grid_height):
             for x in range(self.grid_width):
                 color = self.pixel_grid[y][x]
-                color_id = self._hex_to_id.get(color, "")
+                color_id = COLOR_ID_MAP.get(color, "")
                 pixels.append({
                     'x': x,
                     'y': y,

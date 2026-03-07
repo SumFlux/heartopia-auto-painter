@@ -1,14 +1,11 @@
 """
 心动小镇自动画画脚本 — 画布定位模块
 
-用户手动标定画布四角，根据像素矩阵尺寸计算每个像素的屏幕坐标
+用户手动标定画布两个角，根据像素矩阵尺寸计算每个像素的屏幕坐标。
+不依赖任何特定鼠标库（纯坐标计算）。
 """
 
-import json
-import time
-from typing import Tuple, Optional, Dict
-
-import pyautogui
+from typing import Tuple, Dict
 
 
 class CanvasLocator:
@@ -16,8 +13,8 @@ class CanvasLocator:
 
     def __init__(self):
         self.calibrated = False
-        self.top_left: Tuple[int, int] = (0, 0)      # 画布左上角屏幕坐标
-        self.bottom_right: Tuple[int, int] = (0, 0)   # 画布右下角屏幕坐标
+        self.top_left: Tuple[int, int] = (0, 0)
+        self.bottom_right: Tuple[int, int] = (0, 0)
         self.grid_width: int = 0
         self.grid_height: int = 0
         self.pixel_step_x: float = 0.0
@@ -38,7 +35,6 @@ class CanvasLocator:
         self.grid_width = grid_width
         self.grid_height = grid_height
 
-        # 计算每个像素的步长
         if grid_width > 1:
             self.pixel_step_x = (bottom_right[0] - top_left[0]) / (grid_width - 1)
         else:
@@ -57,7 +53,7 @@ class CanvasLocator:
 
         :param px: 像素 x 坐标 (0-based)
         :param py: 像素 y 坐标 (0-based)
-        :return: (screen_x, screen_y) 屏幕坐标
+        :return: (screen_x, screen_y)
         """
         if not self.calibrated:
             raise RuntimeError("画布尚未标定")
@@ -71,7 +67,7 @@ class CanvasLocator:
         return (abs(self.pixel_step_x), abs(self.pixel_step_y))
 
     def to_dict(self) -> Dict:
-        """序列化为字典（用于保存配置）"""
+        """序列化为字典（用于持久化保存）"""
         return {
             'top_left': list(self.top_left),
             'bottom_right': list(self.bottom_right),
@@ -80,7 +76,7 @@ class CanvasLocator:
         }
 
     def from_dict(self, data: Dict):
-        """从字典恢复（用于加载配置）"""
+        """从字典恢复"""
         self.calibrate(
             grid_width=data['grid_width'],
             grid_height=data['grid_height'],

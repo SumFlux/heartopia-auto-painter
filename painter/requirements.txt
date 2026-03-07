@@ -1,7 +1,5 @@
-pyautogui
+pynput
 pywin32
 Pillow
 PySide6
-keyboard
 numpy<2
-pynput

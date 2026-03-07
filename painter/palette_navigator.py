@@ -1,81 +1,119 @@
 """
 心动小镇自动画画脚本 — 调色板导航模块
 
-管理 13 组颜色的切换定位，以及组内色块坐标的点击
+管理 13 组颜色的切换定位，以及组内色块坐标的点击。
+依赖 InputBackend 接口发送点击，不直接调用具体鼠标库。
+
+标定简化说明：
+  旧版需要用户手动标定 14 个点（2个标签 + 10个色块）
+  新版只需 4 个点：标签左侧 + 标签右侧 + 色块区域左上角 + 色块区域右下角
+  然后根据已知的 2列x5行 网格布局自动计算每个色块中心坐标
 """
 
 import time
-from typing import Tuple, Dict
+from typing import Tuple, Dict, Optional
 
-import pyautogui
-from mouse_input import click_at
+from mouse_input import InputBackend
 
 
 class PaletteNavigator:
-    """调色板导航与颜色选择器
+    """调色板导航与颜色选择器"""
 
-    需要用户手动标定两组坐标：
-    1. 颜色组标签坐标列表 (group_tabs): 上方横排的 13 个颜色组切换按钮的屏幕坐标
-    2. 色块坐标矩阵 (color_blocks): 下方 2列 x 5行 的 10 个颜色块的屏幕坐标
-    """
+    # 色块网格布局常量（2 列 x 5 行）
+    BLOCK_COLS = 2
+    BLOCK_ROWS = 5
+    BLOCK_COUNT = BLOCK_COLS * BLOCK_ROWS  # 10
 
-    def __init__(self):
+    def __init__(self, backend: InputBackend):
+        self.backend = backend
         self.calibrated = False
 
-        # --- 需标定的坐标 ---
-        # 13 个颜色组标签的屏幕坐标。索引 0-12 对应组 1-13
-        # 由于屏幕上同时只能看到约 5 个，这里保存的是“点击后能切换到该组”的固定坐标
-        # 实际上用户只需标定可见的 5 个位置即可，但为了方便，目前要求标定"切换下一组"的常用位置
-        self.group_tabs: Dict[int, Tuple[int, int]] = {}
+        # 标签翻页坐标
+        self.left_tab: Optional[Tuple[int, int]] = None
+        self.right_tab: Optional[Tuple[int, int]] = None
 
-        # 调色板上的 10 个色块坐标
-        # 索引 0-9 对应:
-        # [0] [1]
-        # [2] [3]
-        # [4] [5]
-        # [6] [7]
-        # [8] [9]
+        # 色块区域的边界（左上角和右下角）
+        self.blocks_top_left: Optional[Tuple[int, int]] = None
+        self.blocks_bottom_right: Optional[Tuple[int, int]] = None
+
+        # 自动计算的 10 个色块中心坐标 { index: (x, y) }
         self.color_blocks: Dict[int, Tuple[int, int]] = {}
 
         # 当前选中的组号 (0-based)
         self.current_group_idx = 0
 
-    def calibrate_tabs(self, tabs_coords: Dict[int, Tuple[int, int]]):
-        """标定上方组标签的坐标(这里目前要求传入可见视口的固定切换点)
-        对于心动小镇，其实只需两个坐标：可见的最左侧色块用于向左翻，可见的最右侧用于向右翻。
-        为了简化：要求传入左、右两个翻页点击点的坐标。
+    def calibrate(self,
+                  left_tab: Tuple[int, int],
+                  right_tab: Tuple[int, int],
+                  blocks_top_left: Tuple[int, int],
+                  blocks_bottom_right: Tuple[int, int]):
         """
-        self.group_tabs = tabs_coords
+        一次性标定调色板（4 个点）
 
-    def calibrate_blocks(self, blocks_coords: Dict[int, Tuple[int, int]]):
-        """标定下方 10 个色块的坐标"""
-        self.color_blocks = blocks_coords
-        if len(self.color_blocks) > 0 and 'left_tab' in self.group_tabs and 'right_tab' in self.group_tabs:
-            self.calibrated = True
-
-    def reset_group(self):
-        """将调色板重置回第 1 组（黑白灰）
-        通过连续点击左侧可见标签 13 次实现，确保回到最左边
+        :param left_tab: 色系标签最左侧可见组的坐标（用于向左翻页）
+        :param right_tab: 色系标签最右侧可见组的坐标（用于向右翻页）
+        :param blocks_top_left: 色块区域左上角第一个色块的中心坐标
+        :param blocks_bottom_right: 色块区域右下角最后一个色块的中心坐标
         """
-        if not self.calibrated:
+        self.left_tab = left_tab
+        self.right_tab = right_tab
+        self.blocks_top_left = blocks_top_left
+        self.blocks_bottom_right = blocks_bottom_right
+
+        # 根据 2x5 网格自动计算 10 个色块中心
+        self._compute_block_positions()
+        self.calibrated = True
+
+    def _compute_block_positions(self):
+        """从左上角和右下角自动计算 10 个色块中心坐标"""
+        if not self.blocks_top_left or not self.blocks_bottom_right:
             return
 
-        left_tab = self.group_tabs.get('left_tab')
-        if not left_tab:
+        tl_x, tl_y = self.blocks_top_left
+        br_x, br_y = self.blocks_bottom_right
+
+        # 列间距和行间距
+        if self.BLOCK_COLS > 1:
+            col_step = (br_x - tl_x) / (self.BLOCK_COLS - 1)
+        else:
+            col_step = 0
+
+        if self.BLOCK_ROWS > 1:
+            row_step = (br_y - tl_y) / (self.BLOCK_ROWS - 1)
+        else:
+            row_step = 0
+
+        # 索引布局：从上到下，从左到右
+        # [0] [1]
+        # [2] [3]
+        # [4] [5]
+        # [6] [7]
+        # [8] [9]
+        self.color_blocks = {}
+        for row in range(self.BLOCK_ROWS):
+            for col in range(self.BLOCK_COLS):
+                idx = row * self.BLOCK_COLS + col
+                x = round(tl_x + col * col_step)
+                y = round(tl_y + row * row_step)
+                self.color_blocks[idx] = (x, y)
+
+    def reset_group(self):
+        """将调色板重置回第 0 组（黑白灰）
+        通过连续点击左侧标签 13 次确保回到最左边"""
+        if not self.calibrated or not self.left_tab:
             return
 
         for _ in range(13):
-            click_at(left_tab[0], left_tab[1])
+            self.backend.click(self.left_tab[0], self.left_tab[1])
             time.sleep(0.1)
 
         self.current_group_idx = 0
-        time.sleep(0.5) # 等待 UI 稳定
+        time.sleep(0.5)
 
     def switch_to_group(self, target_group_idx: int):
         """
-        切换到目标颜色组。
-        依靠 'left_tab' 和 'right_tab' 进行相对移动。
-        注意：需要在开始绘画前调用 reset_group 确保当前在第 0 组。
+        切换到目标颜色组（相对翻页）。
+        需要在开始绘画前调用 reset_group 确保当前在第 0 组。
         """
         if not self.calibrated:
             raise RuntimeError("调色板尚未标定")
@@ -85,53 +123,59 @@ class PaletteNavigator:
 
         diff = target_group_idx - self.current_group_idx
 
-        # 需要向右平移
         if diff > 0:
-            right_tab = self.group_tabs['right_tab']
             for _ in range(diff):
-                click_at(right_tab[0], right_tab[1])
-                time.sleep(0.3)  # 等待平移动画
-        # 需要向左平移
+                self.backend.click(self.right_tab[0], self.right_tab[1])
+                time.sleep(0.3)
         else:
-            left_tab = self.group_tabs['left_tab']
             for _ in range(abs(diff)):
-                click_at(left_tab[0], left_tab[1])
+                self.backend.click(self.left_tab[0], self.left_tab[1])
                 time.sleep(0.3)
 
         self.current_group_idx = target_group_idx
-        time.sleep(0.2)  # 给最后的色盘加载一点时间
+        time.sleep(0.2)
 
     def select_color(self, target_group_idx: int, color_idx: int):
         """
         选择指定颜色：先切换组，再点击组内色块
+
+        :param target_group_idx: 目标颜色组号（0-12）
+        :param color_idx: 组内色块索引（0-9，组0为0-5）
         """
         if not self.calibrated:
             raise RuntimeError("调色板尚未标定")
 
-        # 1. 切换组
+        # 切换组
         self.switch_to_group(target_group_idx)
 
-        # 2. 点击组内色块
+        # 点击色块
         if color_idx not in self.color_blocks:
-            raise ValueError(f"无效的色块索引: {color_idx}")
+            raise ValueError(f"无效的色块索引: {color_idx}（已标定索引: {list(self.color_blocks.keys())}）")
 
-        block_pos = self.color_blocks[color_idx]
-        click_at(block_pos[0], block_pos[1])
-        time.sleep(0.35) # 等待游戏内部 UI 响应切换颜色的耗时
+        bx, by = self.color_blocks[color_idx]
+        self.backend.click(bx, by)
+        time.sleep(0.35)  # 等待游戏 UI 响应
 
-    def to_dict(self) -> Dict:
-        """保存配置"""
+    def to_dict(self) -> dict:
+        """序列化标定数据（用于持久化保存）"""
         return {
-            'group_tabs': self.group_tabs,
-            'color_blocks': self.color_blocks
+            'left_tab': list(self.left_tab) if self.left_tab else None,
+            'right_tab': list(self.right_tab) if self.right_tab else None,
+            'blocks_top_left': list(self.blocks_top_left) if self.blocks_top_left else None,
+            'blocks_bottom_right': list(self.blocks_bottom_right) if self.blocks_bottom_right else None,
         }
 
-    def from_dict(self, data: Dict):
-        """加载配置"""
-        self.group_tabs = data.get('group_tabs', {})
-        # JSON 的 key 在反序列化时变成了 string，需要转回 int 
-        raw_blocks = data.get('color_blocks', {})
-        self.color_blocks = {int(k): tuple(v) for k, v in raw_blocks.items()}
+    def from_dict(self, data: dict):
+        """从字典恢复标定数据"""
+        lt = data.get('left_tab')
+        rt = data.get('right_tab')
+        btl = data.get('blocks_top_left')
+        bbr = data.get('blocks_bottom_right')
 
-        if len(self.color_blocks) > 0 and 'left_tab' in self.group_tabs and 'right_tab' in self.group_tabs:
-            self.calibrated = True
+        if lt and rt and btl and bbr:
+            self.calibrate(
+                left_tab=tuple(lt),
+                right_tab=tuple(rt),
+                blocks_top_left=tuple(btl),
+                blocks_bottom_right=tuple(bbr),
+            )
