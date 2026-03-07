@@ -25,7 +25,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QComboBox, QFileDialog, QMessageBox,
-    QGroupBox, QGridLayout, QProgressBar, QTextEdit
+    QGroupBox, QGridLayout, QProgressBar, QTextEdit, QSpinBox
 )
 from PySide6.QtCore import Qt, QTimer, Signal, QObject
 
@@ -175,11 +175,52 @@ class AutoPainterGUI(QMainWindow):
         self.calib_status_label = QLabel("")
         calib_layout.addWidget(self.calib_status_label)
 
+        # 操作按钮行：清除标定 + 测试标定
+        btn_row = QHBoxLayout()
+
         self.recalib_btn = QPushButton("🗑 清除标定（重新标定）")
         self.recalib_btn.setToolTip("清除已保存的标定数据，可以重新标定画布和调色板")
         self.recalib_btn.clicked.connect(self._clear_calibration)
         self.recalib_btn.setEnabled(False)
-        calib_layout.addWidget(self.recalib_btn)
+        btn_row.addWidget(self.recalib_btn)
+
+        self.test_calib_btn = QPushButton("🧪 测试标定（画边框）")
+        self.test_calib_btn.setToolTip("沿画布最外围画一圈黑红交替边框，验证标定是否准确")
+        self.test_calib_btn.clicked.connect(self._test_calibration)
+        self.test_calib_btn.setEnabled(False)
+        btn_row.addWidget(self.test_calib_btn)
+
+        calib_layout.addLayout(btn_row)
+
+        # 微调偏移行
+        offset_row = QHBoxLayout()
+        offset_row.addWidget(QLabel("微调偏移:"))
+
+        offset_row.addWidget(QLabel("X"))
+        self.offset_x_spin = QSpinBox()
+        self.offset_x_spin.setRange(-20, 20)
+        self.offset_x_spin.setValue(0)
+        self.offset_x_spin.setSuffix(" px")
+        self.offset_x_spin.setToolTip("正值=整体右移，负值=整体左移")
+        self.offset_x_spin.valueChanged.connect(self._on_offset_changed)
+        offset_row.addWidget(self.offset_x_spin)
+
+        offset_row.addWidget(QLabel("Y"))
+        self.offset_y_spin = QSpinBox()
+        self.offset_y_spin.setRange(-20, 20)
+        self.offset_y_spin.setValue(0)
+        self.offset_y_spin.setSuffix(" px")
+        self.offset_y_spin.setToolTip("正值=整体下移，负值=整体上移")
+        self.offset_y_spin.valueChanged.connect(self._on_offset_changed)
+        offset_row.addWidget(self.offset_y_spin)
+
+        self.reset_offset_btn = QPushButton("归零")
+        self.reset_offset_btn.setFixedWidth(50)
+        self.reset_offset_btn.clicked.connect(self._reset_offset)
+        offset_row.addWidget(self.reset_offset_btn)
+
+        offset_row.addStretch()
+        calib_layout.addLayout(offset_row)
 
         main_layout.addWidget(calib_group)
 
@@ -419,6 +460,9 @@ class AutoPainterGUI(QMainWindow):
             if canvas_data:
                 self.locator.from_dict(canvas_data)
                 self._log(f"[OK] 已加载画布标定（{canvas_data['grid_width']}x{canvas_data['grid_height']}）")
+                # 恢复微调偏移到 UI
+                self.offset_x_spin.setValue(self.locator.offset_x)
+                self.offset_y_spin.setValue(self.locator.offset_y)
 
             if palette_data:
                 self.navigator.from_dict(palette_data)
@@ -447,10 +491,14 @@ class AutoPainterGUI(QMainWindow):
         # 有任何一项标定了就可以清除
         self.recalib_btn.setEnabled(self.locator.calibrated or self.navigator.calibrated)
 
+        # 两项都标定了才能测试
+        both_calibrated = self.locator.calibrated and self.navigator.calibrated
+        self.test_calib_btn.setEnabled(both_calibrated)
+
     def _clear_calibration(self):
         """清除所有标定数据"""
-        self.locator.calibrated = False
-        self.navigator.calibrated = False
+        self.locator.reset()
+        self.navigator.reset()
 
         # 删除保存的标定文件
         if os.path.exists(CALIBRATION_FILE):
@@ -459,9 +507,68 @@ class AutoPainterGUI(QMainWindow):
             except Exception:
                 pass
 
+        # 重置微调控件
+        self.offset_x_spin.setValue(0)
+        self.offset_y_spin.setValue(0)
+
+        # 确保标定按钮可用
+        self.calib_canvas_btn.setEnabled(True)
+        self.calib_palette_btn.setEnabled(True)
+
         self._update_calib_status()
         self._check_ready()
         self._log("[OK] 标定数据已清除，请重新标定画布和调色板")
+
+    def _test_calibration(self):
+        """测试标定：沿画布边框画一圈黑红交替"""
+        if not self.locator.calibrated or not self.navigator.calibrated:
+            QMessageBox.warning(self, "提示", "请先完成画布和调色板标定！")
+            return
+
+        hwnd = find_game_window()
+        if not hwnd:
+            QMessageBox.warning(self, "未找到游戏", "请确保心动小镇正在运行")
+            return
+
+        bring_to_front(hwnd)
+
+        self.test_calib_btn.setEnabled(False)
+        self._log("--- 开始测试标定（画边框）---")
+
+        def on_log(msg):
+            self.signals.log_msg.emit(msg)
+
+        def on_done():
+            QTimer.singleShot(0, lambda: self.test_calib_btn.setEnabled(True))
+
+        self.engine.test_border(on_log=on_log, on_done=on_done)
+
+    def _on_offset_changed(self):
+        """微调偏移值变化时更新 locator 并保存"""
+        ox = self.offset_x_spin.value()
+        oy = self.offset_y_spin.value()
+        self.locator.set_offset(ox, oy)
+
+        # 自动保存到标定文件（不刷日志，避免频繁输出）
+        if self.locator.calibrated:
+            self._save_calibration_quiet()
+
+    def _save_calibration_quiet(self):
+        """静默保存标定数据（不输出日志）"""
+        data = {
+            'canvas': self.locator.to_dict() if self.locator.calibrated else None,
+            'palette': self.navigator.to_dict() if self.navigator.calibrated else None,
+        }
+        try:
+            with open(CALIBRATION_FILE, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2)
+        except Exception:
+            pass
+
+    def _reset_offset(self):
+        """重置偏移到 (0, 0)"""
+        self.offset_x_spin.setValue(0)
+        self.offset_y_spin.setValue(0)
 
     # ===== 画画控制 =====
 

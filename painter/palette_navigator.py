@@ -42,6 +42,16 @@ class PaletteNavigator:
         # 当前选中的组号 (0-based)
         self.current_group_idx = 0
 
+    def reset(self):
+        """重置所有状态到初始值（清除标定时使用）"""
+        self.calibrated = False
+        self.left_tab = None
+        self.right_tab = None
+        self.blocks_top_left = None
+        self.blocks_bottom_right = None
+        self.color_blocks = {}
+        self.current_group_idx = 0
+
     def calibrate(self,
                   left_tab: Tuple[int, int],
                   right_tab: Tuple[int, int],

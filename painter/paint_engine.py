@@ -297,3 +297,104 @@ class PaintEngine:
     def has_saved_progress(self) -> bool:
         """检查是否有未完成的绘画进度"""
         return os.path.exists(self.PROGRESS_FILE)
+
+    def test_border(self, on_log=None, on_done=None):
+        """
+        测试标定：沿画布最外围画一圈边框，黑红交替
+
+        用于验证标定准确性，检查是否所有边缘格子都能点到。
+        使用两种颜色（黑色 0-0, 红色 1-0）交替绘制，便于观察。
+
+        :param on_log: 日志回调 (str) -> None
+        :param on_done: 完成回调 () -> None
+        """
+        if not self.locator.calibrated or not self.navigator.calibrated:
+            if on_log:
+                on_log("[!] 标定未完成，无法测试")
+            return
+
+        def _log(msg):
+            if on_log:
+                on_log(msg)
+
+        def _worker():
+            try:
+                W = self.locator.grid_width
+                H = self.locator.grid_height
+
+                # 构建边框坐标序列（顺时针：顶→右→底→左）
+                border_points = []
+
+                # 顶边: (0,0) → (W-1, 0)
+                for x in range(W):
+                    border_points.append((x, 0))
+
+                # 右边: (W-1, 1) → (W-1, H-1)
+                for y in range(1, H):
+                    border_points.append((W - 1, y))
+
+                # 底边: (W-2, H-1) → (0, H-1)
+                for x in range(W - 2, -1, -1):
+                    border_points.append((x, H - 1))
+
+                # 左边: (0, H-2) → (0, 1)
+                for y in range(H - 2, 0, -1):
+                    border_points.append((0, y))
+
+                total = len(border_points)
+                _log(f"[测试标定] 边框共 {total} 个点，黑红交替绘制...")
+
+                time.sleep(1)  # 给用户切窗口的缓冲
+
+                # 重置调色板到第0组
+                self.navigator.reset_group()
+
+                # 分两轮画：先画偶数索引（黑色 0-0），再画奇数索引（红色 1-0）
+                # 这样只需切 2 次颜色，比每个点都切高效得多
+                even_points = [(i, pt) for i, pt in enumerate(border_points) if i % 2 == 0]
+                odd_points = [(i, pt) for i, pt in enumerate(border_points) if i % 2 == 1]
+
+                drawn = 0
+
+                # 第一轮：黑色
+                _log(f"  第1轮: 选择黑色，绘制 {len(even_points)} 个点...")
+                self.navigator.select_color(0, 0)
+                time.sleep(0.15)
+
+                for orig_idx, (px, py) in even_points:
+                    if self._stop_event.is_set():
+                        _log("[测试标定] 已中止")
+                        return
+
+                    screen_x, screen_y = self.locator.get_screen_pos(px, py)
+                    self.backend.click(screen_x, screen_y, press_duration=0.015)
+                    drawn += 1
+                    time.sleep(0.03)
+
+                # 第二轮：红色
+                _log(f"  第2轮: 选择红色，绘制 {len(odd_points)} 个点...")
+                self.navigator.select_color(1, 0)
+                time.sleep(0.15)
+
+                for orig_idx, (px, py) in odd_points:
+                    if self._stop_event.is_set():
+                        _log("[测试标定] 已中止")
+                        return
+
+                    screen_x, screen_y = self.locator.get_screen_pos(px, py)
+                    self.backend.click(screen_x, screen_y, press_duration=0.015)
+                    drawn += 1
+                    time.sleep(0.03)
+
+                _log(f"[测试标定] 完成！共绘制 {drawn} 个点")
+                _log(f"  请检查游戏中边框是否完整覆盖画布四周")
+                _log(f"  如果有缺口或偏移，可用微调功能调整后重新测试")
+
+            except Exception as e:
+                _log(f"[测试标定] 出错: {e}")
+            finally:
+                if on_done:
+                    on_done()
+
+        self._stop_event.clear()
+        threading.Thread(target=_worker, daemon=True).start()
