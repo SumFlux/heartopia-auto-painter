@@ -24,46 +24,34 @@ class HeartopiaPixelArt:
         '9:16': [[18, 30], [28, 50], [56, 100], [84, 150]]
     }
 
-    # 心动小镇游戏原生颜色（从原工程 color.svg 提取，共 13 组 125 色）
-    GAME_COLORS_HEX = [
-        # Group 1 - 黑白灰
-        '#051616', '#414545', '#808282', '#bebfbf', '#feffff',
-        # Group 2 - 红色系
-        '#cf354d', '#ee6f72', '#a6263d', '#c98483', '#f5aca6',
-        '#682f39', '#e7d5d5', '#a35d5e', '#c0acab', '#755e5e',
-        # Group 3 - 橙红色系
-        '#e95e2b', '#f98358', '#ab4226', '#d9937c', '#feba9f',
-        '#753b31', '#e9d5d0', '#af6c58', '#c1aca6', '#755e59',
-        # Group 4 - 橙色系
-        '#f49e16', '#feae3b', '#b16f16', '#daa76d', '#fece92',
-        '#795126', '#f5e4ce', '#b3814b', '#cdbca9', '#806f5e',
-        # Group 5 - 黄色系
-        '#edca16', '#f9d838', '#b39416', '#d4be6f', '#f9e690',
-        '#756326', '#eee7c7', '#ab954b', '#c6bfa2', '#787259',
-        # Group 6 - 黄绿色系
-        '#a7bb16', '#b6c833', '#758616', '#acb66c', '#d8df93',
-        '#535e2b', '#e6e9c7', '#85914b', '#bcc2a3', '#6e745d',
-        # Group 7 - 绿色系
-        '#05a25d', '#41b97b', '#057447', '#76b28b', '#9cdaad',
-        '#245640', '#c3e0cc', '#4f8969', '#9db7a6', '#53695d',
-        # Group 8 - 青绿色系
-        '#058781', '#05aba0', '#056966', '#55a49c', '#7ecdc2',
-        '#054b4b', '#bee0da', '#2b7e78', '#98b7b2', '#4e6b66',
-        # Group 9 - 青色系
-        '#05729c', '#0599ba', '#055878', '#5193a5', '#79bbca',
-        '#05495b', '#c6dde2', '#246d7f', '#9eb5ba', '#4f676f',
-        # Group 10 - 蓝色系
-        '#055ea6', '#2b83c1', '#054782', '#5d80a1', '#83a8c9',
-        '#193b56', '#c1cdd5', '#365b7f', '#9ba6b0', '#4c5967',
-        # Group 11 - 蓝紫色系
-        '#534da1', '#7577bd', '#3e387e', '#787aa1', '#a2a0c7',
-        '#333555', '#c9cad5', '#55567e', '#a2a3b0', '#565869',
-        # Group 12 - 紫色系
-        '#813d8b', '#a167a9', '#602b6c', '#907395', '#b89bb9',
-        '#432e4b', '#cfc9d1', '#6c4d73', '#aba1ac', '#605664',
-        # Group 13 - 粉色系
-        '#ad356f', '#cf6b8f', '#862658', '#b3798b', '#d9a1b4',
-        '#60354b', '#e4d5da', '#8b5367', '#bcadb1', '#725e66',
+    # 13 组，共 126 种心动小镇原版调色盘精选颜色（来自实际截图取色）
+    HEARTOPIA_COLORS = [
+        # 组1 - 黑白灰 (6色)
+        '#051616', '#434747', '#828484', '#b9b7b6', '#e0dbd9', '#a8978e',
+        # 组2 - 红色系 (10色)
+        '#cf354d', '#ee6f72', '#a6263d', '#f5ada8', '#ca8988', '#9f6d6b', '#7b5859', '#9c857e', '#8c746c', '#75584d',
+        # 组3 - 橙红色系 (10色)
+        '#e95e2b', '#f98358', '#ab4226', '#feba9f', '#d9947d', '#af7868', '#825951', '#b09a92', '#998179', '#795e54',
+        # 组4 - 橙色系 (10色)
+        '#f49e16', '#feae3b', '#b16f16', '#fece92', '#daa76c', '#b3814b', '#7a542c', '#f5e4cf', '#c1b0a1', '#88776b',
+        # 组5 - 黄色系 (10色)
+        '#edca16', '#f9d838', '#b39416', '#fae792', '#d3bf74', '#a89460', '#827150', '#a59282', '#8f796c', '#765a4f',
+        # 组6 - 黄绿色系 (10色)
+        '#a9bd20', '#b3bf50', '#818745', '#a29575', '#8f8067', '#775c50', '#75584d', '#75584d', '#75584d', '#74574c',
+        # 组7 - 绿色系 (10色)
+        '#05a25d', '#41b97b', '#057447', '#9edaaf', '#81b694', '#6c8772', '#646a5d', '#918478', '#7f685e', '#75584d',
+        # 组8 - 青绿色系 (10色)
+        '#058781', '#05aba0', '#056966', '#82cec3', '#65aaa3', '#5b7f79', '#5d6662', '#8d8178', '#7e685e', '#75584d',
+        # 组9 - 青色系 (10色)
+        '#05729c', '#0599ba', '#055878', '#79bbca', '#5193a5', '#2d7082', '#235767', '#b8c3c4', '#969998', '#796c66',
+        # 组10 - 蓝色系 (10色)
+        '#055ea6', '#2b83c1', '#054782', '#84a8c9', '#6283a3', '#556c85', '#525c68', '#9b908e', '#887671', '#775c52',
+        # 组11 - 蓝紫色系 (10色)
+        '#534da1', '#7577bd', '#3e387e', '#a2a0c7', '#787aa1', '#5c5d82', '#4c4e67', '#b5afb3', '#958989', '#7b6762',
+        # 组12 - 紫色系 (10色)
+        '#813d8b', '#a167a9', '#602c6c', '#ba9fbb', '#98809b', '#7d6674', '#715e60', '#89716a', '#795e54', '#75584d',
+        # 组13 - 粉色系 (10色)
+        '#ad356f', '#cf6b8f', '#862658', '#d9a3b5', '#b88594', '#8f6771', '#795e61', '#98827c', '#82685f', '#75584d'
     ]
 
     def __init__(self, ratio: str = '1:1', level: int = 2):
@@ -84,9 +72,23 @@ class HeartopiaPixelArt:
 
         # 预计算调色板 RGB 值（使用 int 类型，避免 uint8 溢出）
         self._palette_rgb = []
-        for hex_color in self.GAME_COLORS_HEX:
+        self._hex_to_id = {}
+        for i, hex_color in enumerate(self.HEARTOPIA_COLORS):
+            # 组号推算：
+            # 组 1 = index 0~5
+            # 组 2~13 = 每个10个
+            if i < 6:
+                group_idx = 0
+                color_idx = i
+            else:
+                group_idx = (i - 6) // 10 + 1
+                color_idx = (i - 6) % 10
+                
+            color_id = f"{group_idx}-{color_idx}"
             r, g, b = self._hex_to_rgb(hex_color)
+            
             self._palette_rgb.append((r, g, b, hex_color))
+            self._hex_to_id[hex_color] = color_id
 
     @staticmethod
     def _hex_to_rgb(hex_color: str) -> Tuple[int, int, int]:
@@ -303,10 +305,12 @@ class HeartopiaPixelArt:
         for y in range(self.grid_height):
             for x in range(self.grid_width):
                 color = self.pixel_grid[y][x]
+                color_id = self._hex_to_id.get(color, "")
                 pixels.append({
                     'x': x,
                     'y': y,
-                    'color': color
+                    'color': color,
+                    'colorId': color_id
                 })
                 color_count[color] = color_count.get(color, 0) + 1
 
