@@ -55,9 +55,43 @@
 ### 2026-03-07：同步真实调色板与新增专属 colorId
 
 #### 问题描述
-转换器的预置 125 色与游戏实际截图的色卡由于环境不同出现颜色数值误差，导致依靠 HEX 获取组别和颜色位置以控制自动画板切换时频繁报错“未知的颜色”。
+转换器的预置 125 色与游戏实际截图的色卡由于环境不同出现颜色数值误差，导致依靠 HEX 获取组别和颜色位置以控制自动画板切换时频繁报错”未知的颜色”。
 
 #### 解决方案与改动
 1. **统一调色板数据**：使用提取脚本直接从游戏调色板截图中提取所有的 126 个特征颜色（组 1 为 6 色，组 2-13 各 10 色），替换掉了 `HEARTOPIA_COLORS` 中旧的估计色值。
-2. **生成独占定位 ID**：由于单纯获取最相近颜色依然会存在兼容性问题，转换器现在会在解析图像并在匹配完成后，在生成的 `pixels` JSON 列表中，给每一个字典自带计算好的 `colorId`（格式如 `"1-0"` 即对应游戏画板第二排第一格）。画笔程序将完全依靠此绝对位置去点击颜色，避开任何匹配失误。
+2. **生成独占定位 ID**：由于单纯获取最相近颜色依然会存在兼容性问题，转换器现在会在解析图像并在匹配完成后，在生成的 `pixels` JSON 列表中，给每一个字典自带计算好的 `colorId`（格式如 `”1-0”` 即对应游戏画板第二排第一格）。画笔程序将完全依靠此绝对位置去点击颜色，避开任何匹配失误。
+
+### 2026-03-07：提取共享调色板模块，消除重复数据源
+
+#### 问题描述
+converter 和 painter 各自维护了一份独立的颜色数据（converter 的 `HEARTOPIA_COLORS` 28 行 + painter 的 `COLOR_GROUPS` 96 行）。两份数据需要人工同步，且 converter 内部自行实现了 `_hex_to_rgb`、`_rgb_to_hex` 等辅助函数，与 painter 的 `config.py` 中的同名函数重复。
+
+#### 改动内容
+
+##### 新建 `shared/palette.py`（唯一调色板数据源）
+- 集中定义 `COLOR_GROUPS`（13 组，126 色）、`FLAT_COLORS`（一维列表）
+- 自动构建派生数据：`COLOR_ID_MAP`、`HEX_TO_GROUP`、`PALETTE_RGB`
+- 提供公共工具函数：`hex_to_rgb`、`find_closest_color`、`get_closest_color_group`
+- 定义 `CANVAS_BACKGROUND_COLORS`（画布背景色集合）
+
+##### 新建 `shared/pixel_data.py`（JSON 读写契约）
+- `PixelData` 类封装了 converter 导出 / painter 导入的 JSON 格式
+- 内置字段校验（`gridWidth`、`gridHeight`、`pixels` 必须存在且合法）
+- 修复了旧代码中 painter 用 `len(pixels)` 当高度而非读取 `gridHeight` 的维度 bug
+
+##### 重构 `heartopia_converter.py`
+- **删除**：`HEARTOPIA_COLORS` 硬编码列表（28 行）
+- **删除**：`_hex_to_rgb`、`_rgb_to_hex` 静态方法
+- **删除**：`__init__` 中手动构建 `_palette_rgb` 和 `_hex_to_id` 的代码
+- **改为**：`from shared.palette import PALETTE_RGB, COLOR_ID_MAP, hex_to_rgb, find_closest_color`
+- `_find_closest_color` 简化为调用 `find_closest_color(r, g, b)` 取 hex 返回
+- `export_json` 中 `self._hex_to_id.get` 改为 `COLOR_ID_MAP.get`
+
+##### 修改 `gui.py`
+- 添加 `sys.path.insert(0, 项目根目录)` 以支持 `from shared.xxx` 导入
+
+#### 验证结果
+- 所有 11 个 Python 文件语法检查通过
+- `shared.palette` 模块功能测试通过：126 色、COLOR_ID_MAP 映射、find_closest_color 匹配
+- converter 导入链正常工作，HeartopiaPixelArt 初始化和颜色匹配行为不变
 
