@@ -565,6 +565,26 @@ class AutoPainterGUI(QMainWindow):
 def main():
     import ctypes
 
+    # ===== 自动请求管理员权限 =====
+    # 心动小镇以管理员权限运行，Windows UIPI 会拦截低权限进程的鼠标点击事件。
+    # 必须以管理员身份运行脚本，否则鼠标能移动但点击无效。
+    try:
+        is_admin = ctypes.windll.shell32.IsUserAnAdmin()
+    except Exception:
+        is_admin = False
+
+    if not is_admin:
+        # 用 ShellExecuteW 以 "runas" 重新启动自身
+        try:
+            ctypes.windll.shell32.ShellExecuteW(
+                None, "runas", sys.executable,
+                " ".join([f'"{arg}"' for arg in sys.argv]),
+                None, 1  # SW_SHOWNORMAL
+            )
+        except Exception:
+            pass
+        sys.exit(0)
+
     # 强制 DPI 感知，确保坐标 1:1
     try:
         ctypes.windll.shcore.SetProcessDpiAwareness(1)
