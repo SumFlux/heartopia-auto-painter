@@ -10,7 +10,7 @@ from pathlib import Path
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QComboBox, QFileDialog, QMessageBox,
-    QGroupBox, QGridLayout, QScrollArea
+    QGroupBox, QGridLayout, QScrollArea, QCheckBox, QSlider
 )
 from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtGui import QPixmap, QImage
@@ -24,16 +24,29 @@ class ConversionThread(QThread):
     finished = Signal(object, object)  # 转换完成信号
     error = Signal(str)  # 错误信号
 
-    def __init__(self, image_path, ratio, level):
+    def __init__(self, image_path, ratio, level, enhance=False, dither=False,
+                 saturation=1.3, contrast=1.2, sharpness=1.3):
         super().__init__()
         self.image_path = image_path
         self.ratio = ratio
         self.level = level
+        self.enhance = enhance
+        self.dither = dither
+        self.saturation = saturation
+        self.contrast = contrast
+        self.sharpness = sharpness
 
     def run(self):
         try:
             converter = HeartopiaPixelArt(ratio=self.ratio, level=self.level)
-            converter.process_image(self.image_path)
+            converter.process_image(
+                self.image_path,
+                enhance=self.enhance,
+                dither=self.dither,
+                saturation=self.saturation,
+                contrast=self.contrast,
+                sharpness=self.sharpness
+            )
             self.finished.emit(converter, converter.pixel_grid)
         except Exception as e:
             self.error.emit(str(e))
@@ -115,6 +128,75 @@ class HeartopiaGUI(QMainWindow):
         self.grid_info_label = QLabel()
         self.update_grid_info()
         config_layout.addWidget(self.grid_info_label, 2, 0, 1, 2)
+
+        # 图像增强复选框与恢复默认按钮
+        enhance_layout = QHBoxLayout()
+        enhance_layout.setContentsMargins(0, 0, 0, 0)
+
+        self.enhance_check = QCheckBox("图像增强")
+        self.enhance_check.setToolTip("勾选后启用下方的饱和度/对比度/锐度调节")
+        self.enhance_check.stateChanged.connect(self._on_enhance_toggled)
+        enhance_layout.addWidget(self.enhance_check)
+
+        self.reset_btn = QPushButton("恢复默认")
+        self.reset_btn.setToolTip("恢复饱和度1.3、对比度1.2、锐度1.3的默认值")
+        self.reset_btn.setEnabled(False)
+        self.reset_btn.setMaximumWidth(80)
+        self.reset_btn.clicked.connect(self._reset_sliders)
+        enhance_layout.addWidget(self.reset_btn)
+        
+        enhance_layout.addStretch()
+        config_layout.addLayout(enhance_layout, 3, 0, 1, 2)
+
+        # 饱和度滑块
+        config_layout.addWidget(QLabel("饱和度:"), 4, 0)
+        sat_layout = QHBoxLayout()
+        sat_layout.setContentsMargins(0, 0, 0, 0)
+        self.sat_slider = QSlider(Qt.Horizontal)
+        self.sat_slider.setRange(0, 40)   # 0~40 映射到 0.0~4.0
+        self.sat_slider.setValue(13)       # 默认 1.3
+        self.sat_slider.setEnabled(False)
+        self.sat_label = QLabel("1.3")
+        self.sat_label.setFixedWidth(30)
+        self.sat_slider.valueChanged.connect(lambda v: self.sat_label.setText(f"{v/10:.1f}"))
+        sat_layout.addWidget(self.sat_slider)
+        sat_layout.addWidget(self.sat_label)
+        config_layout.addLayout(sat_layout, 4, 1)
+
+        # 对比度滑块
+        config_layout.addWidget(QLabel("对比度:"), 5, 0)
+        con_layout = QHBoxLayout()
+        con_layout.setContentsMargins(0, 0, 0, 0)
+        self.con_slider = QSlider(Qt.Horizontal)
+        self.con_slider.setRange(0, 40)
+        self.con_slider.setValue(12)       # 默认 1.2
+        self.con_slider.setEnabled(False)
+        self.con_label = QLabel("1.2")
+        self.con_label.setFixedWidth(30)
+        self.con_slider.valueChanged.connect(lambda v: self.con_label.setText(f"{v/10:.1f}"))
+        con_layout.addWidget(self.con_slider)
+        con_layout.addWidget(self.con_label)
+        config_layout.addLayout(con_layout, 5, 1)
+
+        # 锐度滑块
+        config_layout.addWidget(QLabel("锐度:"), 6, 0)
+        sha_layout = QHBoxLayout()
+        sha_layout.setContentsMargins(0, 0, 0, 0)
+        self.sha_slider = QSlider(Qt.Horizontal)
+        self.sha_slider.setRange(0, 40)
+        self.sha_slider.setValue(13)       # 默认 1.3
+        self.sha_slider.setEnabled(False)
+        self.sha_label = QLabel("1.3")
+        self.sha_label.setFixedWidth(30)
+        self.sha_slider.valueChanged.connect(lambda v: self.sha_label.setText(f"{v/10:.1f}"))
+        sha_layout.addWidget(self.sha_slider)
+        sha_layout.addWidget(self.sha_label)
+        config_layout.addLayout(sha_layout, 6, 1)
+
+        # 抖动复选框
+        self.dither_check = QCheckBox("抖动模式（Floyd-Steinberg，过渡更自然）")
+        self.dither_check.setToolTip("将颜色量化误差扩散到相邻像素，颜色过渡区域更平滑，但颜色种类更多")
+        config_layout.addWidget(self.dither_check, 7, 0, 1, 2)
 
         config_group.setLayout(config_layout)
         layout.addWidget(config_group)
@@ -216,6 +298,20 @@ class HeartopiaGUI(QMainWindow):
 
         self.grid_info_label.setText(f"网格尺寸: {width} × {height} 像素")
 
+    def _on_enhance_toggled(self, state):
+        """增强复选框切换时启用/禁用三个滑块和恢复按钮"""
+        enabled = bool(state)
+        self.sat_slider.setEnabled(enabled)
+        self.con_slider.setEnabled(enabled)
+        self.sha_slider.setEnabled(enabled)
+        self.reset_btn.setEnabled(enabled)
+
+    def _reset_sliders(self):
+        """恢复滑块到默认位置"""
+        self.sat_slider.setValue(13)
+        self.con_slider.setValue(12)
+        self.sha_slider.setValue(13)
+
     def select_image(self):
         """选择图片"""
         file_path, _ = QFileDialog.getOpenFileName(
@@ -238,13 +334,28 @@ class HeartopiaGUI(QMainWindow):
 
         ratio = self.ratio_combo.currentText()
         level = self.level_combo.currentIndex()
+        enhance = self.enhance_check.isChecked()
+        dither = self.dither_check.isChecked()
+        saturation = self.sat_slider.value() / 10
+        contrast = self.con_slider.value() / 10
+        sharpness = self.sha_slider.value() / 10
 
         # 禁用按钮
         self.convert_btn.setEnabled(False)
-        self.status_label.setText("正在转换...")
+        mode_hints = []
+        if enhance:
+            mode_hints.append(f"增强(饱和{saturation}/对比{contrast}/锐{sharpness})")
+        if dither:
+            mode_hints.append("抖动")
+        hint = f"（{'+'.join(mode_hints)}）" if mode_hints else ""
+        self.status_label.setText(f"正在转换{hint}...")
 
         # 启动转换线程
-        self.thread = ConversionThread(self.image_path, ratio, level)
+        self.thread = ConversionThread(
+            self.image_path, ratio, level,
+            enhance=enhance, dither=dither,
+            saturation=saturation, contrast=contrast, sharpness=sharpness
+        )
         self.thread.finished.connect(self.on_conversion_finished)
         self.thread.error.connect(self.on_conversion_error)
         self.thread.start()

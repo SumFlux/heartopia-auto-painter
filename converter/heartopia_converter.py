@@ -147,41 +147,100 @@ class HeartopiaPixelArt:
 
         return img.crop((sx, sy, sx + sw, sy + sh))
 
-    def process_image(self, image_path: str) -> List[List[str]]:
-        """处理图片，生成像素矩阵"""
-        # 打开图片
+    def _enhance_image(self, img: Image.Image,
+                       saturation: float = 1.0,
+                       contrast: float = 1.0,
+                       sharpness: float = 1.0) -> Image.Image:
+        """
+        预处理增强：提升饱和度、对比度和锐化，减少颜色"脏"感
+        """
+        from PIL import ImageEnhance
+        img = ImageEnhance.Color(img).enhance(saturation)
+        img = ImageEnhance.Contrast(img).enhance(contrast)
+        img = ImageEnhance.Sharpness(img).enhance(sharpness)
+        return img
+
+    def _quantize_simple(self, arr: np.ndarray) -> List[List[str]]:
+        """简单最近邻颜色量化"""
+        grid = []
+        for y in range(self.grid_height):
+            row = []
+            for x in range(self.grid_width):
+                r, g, b = int(arr[y, x, 0]), int(arr[y, x, 1]), int(arr[y, x, 2])
+                row.append(self._find_closest_color(r, g, b))
+            grid.append(row)
+        return grid
+
+    def _quantize_dither(self, arr: np.ndarray) -> List[List[str]]:
+        """
+        Floyd-Steinberg 误差扩散抖动量化
+        将量化误差按权重扩散给相邻像素，使颜色过渡更自然
+        """
+        buf = arr.astype(np.float32)
+        grid = []
+
+        for y in range(self.grid_height):
+            row = []
+            for x in range(self.grid_width):
+                r = int(max(0, min(255, buf[y, x, 0])))
+                g = int(max(0, min(255, buf[y, x, 1])))
+                b = int(max(0, min(255, buf[y, x, 2])))
+
+                color_hex = self._find_closest_color(r, g, b)
+                row.append(color_hex)
+
+                pr, pg, pb = self._hex_to_rgb(color_hex)
+                err = np.array([r - pr, g - pg, b - pb], dtype=np.float32)
+
+                # Floyd-Steinberg 误差扩散
+                if x + 1 < self.grid_width:
+                    buf[y, x + 1, :3] += err * (7 / 16)
+                if y + 1 < self.grid_height:
+                    if x > 0:
+                        buf[y + 1, x - 1, :3] += err * (3 / 16)
+                    buf[y + 1, x, :3] += err * (5 / 16)
+                    if x + 1 < self.grid_width:
+                        buf[y + 1, x + 1, :3] += err * (1 / 16)
+
+            grid.append(row)
+        return grid
+
+    def process_image(self, image_path: str,
+                      enhance: bool = False,
+                      dither: bool = False,
+                      saturation: float = 1.3,
+                      contrast: float = 1.2,
+                      sharpness: float = 1.3) -> List[List[str]]:
+        """
+        处理图片，生成像素矩阵
+        :param image_path: 图片路径
+        :param enhance: 是否进行预处理增强
+        :param dither: 是否使用 Floyd-Steinberg 误差扩散抖动
+        :param saturation: 饱和度倍数（1.0=原始）
+        :param contrast: 对比度倍数（1.0=原始）
+        :param sharpness: 锐度倍数（1.0=原始）
+        """
         img = Image.open(image_path)
 
-        # 处理 EXIF 旋转（手机拍摄的照片可能有旋转信息）
         from PIL import ImageOps
         img = ImageOps.exif_transpose(img)
-
-        # 转换为 RGB 模式
         img = img.convert('RGB')
-
-        # 中心裁剪以适应目标比例
         img = self._center_crop(img)
 
-        # 调整大小到网格尺寸
+        if enhance:
+            img = self._enhance_image(img, saturation=saturation, contrast=contrast, sharpness=sharpness)
+
         img_resized = img.resize(
             (self.grid_width, self.grid_height),
             Image.Resampling.LANCZOS
         )
 
-        # 转换为 numpy 数组（用于快速访问像素）
-        img_array = np.array(img_resized, dtype=np.int32)  # 关键：使用 int32，避免 uint8 溢出
+        img_array = np.array(img_resized, dtype=np.int32)
 
-        # 初始化像素网格
-        self.pixel_grid = []
-
-        # 处理每个像素
-        for y in range(self.grid_height):
-            row = []
-            for x in range(self.grid_width):
-                r, g, b = int(img_array[y, x, 0]), int(img_array[y, x, 1]), int(img_array[y, x, 2])
-                closest_color = self._find_closest_color(r, g, b)
-                row.append(closest_color)
-            self.pixel_grid.append(row)
+        if dither:
+            self.pixel_grid = self._quantize_dither(img_array)
+        else:
+            self.pixel_grid = self._quantize_simple(img_array)
 
         return self.pixel_grid
 
