@@ -6,8 +6,11 @@
 
 - 支持 5 种画布比例（16:9, 4:3, 1:1, 3:4, 9:16）
 - 支持 4 个精细度等级（Level 0-3）
-- 使用心动小镇游戏原生颜色
+- 使用心动小镇游戏原生颜色（13 组 125 色，从原工程 color.svg 提取）
+- 自动中心裁剪适应目标比例
+- 自动处理 EXIF 旋转（手机照片）
 - 导出 JSON 和 CSV 格式
+- GUI 图形界面（需要 PySide6）
 
 ## 安装
 
@@ -15,20 +18,28 @@
 pip install -r requirements.txt
 ```
 
-## 使用方法
-
-### 基本用法
+如需使用 GUI 界面，还需安装：
 
 ```bash
-python heartopia_converter.py image.jpg
+pip install PySide6
 ```
 
-默认使用 1:1 比例，Level 2 精细度（100x100 网格）
+## 使用方法
 
-### 指定比例和精细度
+### 命令行
 
 ```bash
-python heartopia_converter.py image.jpg 1:1 2
+# 默认 1:1 比例，Level 2 精细度
+python heartopia_converter.py image.jpg
+
+# 指定比例和精细度
+python heartopia_converter.py image.jpg 1:1 3
+```
+
+### GUI 界面
+
+```bash
+python gui.py
 ```
 
 ### 参数说明
@@ -41,10 +52,10 @@ python heartopia_converter.py image.jpg 1:1 2
   - `9:16` - 手机竖屏（18x30, 28x50, 56x100, 84x150）
 
 - **精细度**：
-  - `0` - 最低（最小网格）
+  - `0` - 最低（最小网格，最快）
   - `1` - 低
   - `2` - 中（推荐）
-  - `3` - 高（最大网格）
+  - `3` - 高（最大网格，最精细）
 
 ## 输出文件
 
@@ -59,12 +70,12 @@ python heartopia_converter.py image.jpg 1:1 2
   "totalPixels": 8523,
   "colorCount": 45,
   "colors": {
-    "#FF0000": 234,
-    "#00FF00": 189
+    "#fece92": 234,
+    "#a6263d": 189
   },
   "pixels": [
-    {"x": 0, "y": 0, "color": "#FF5733"},
-    {"x": 1, "y": 0, "color": "#33FF57"}
+    {"x": 0, "y": 0, "color": "#fece92"},
+    {"x": 1, "y": 0, "color": "#cf354d"}
   ]
 }
 ```
@@ -73,31 +84,32 @@ python heartopia_converter.py image.jpg 1:1 2
 
 ```csv
 x,y,color
-0,0,#FF5733
-1,0,#33FF57
+0,0,#fece92
+1,0,#cf354d
 ```
 
-## 示例
+## 颜色系统
 
-```bash
-# 生成 100x100 的正方形像素画
-python heartopia_converter.py photo.jpg 1:1 2
+使用从 [原工程](https://github.com/zerochansy/Heartopia-Painting-Tools) 的 `color.svg` 中提取的 125 种游戏原生颜色，分为 13 组：
 
-# 生成 150x150 的高精细度像素画
-python heartopia_converter.py photo.jpg 1:1 3
-
-# 生成 100x56 的宽屏像素画
-python heartopia_converter.py photo.jpg 16:9 2
-```
-
-## 输出说明
-
-- `image_heartopia.json` - 像素数据（用于自动画画脚本）
-- `image_heartopia.csv` - CSV 格式（方便 Excel 查看）
-- 控制台会显示 ASCII 预览和统计信息
+| 组号 | 名称 | 主色 |
+|------|------|------|
+| 1 | 黑白灰 | 5 色 |
+| 2 | 红色系 | 10 色 |
+| 3 | 橙红色系 | 10 色 |
+| 4 | 橙色系 | 10 色 |
+| 5 | 黄色系 | 10 色 |
+| 6 | 黄绿色系 | 10 色 |
+| 7 | 绿色系 | 10 色 |
+| 8 | 青绿色系 | 10 色 |
+| 9 | 青色系 | 10 色 |
+| 10 | 蓝色系 | 10 色 |
+| 11 | 蓝紫色系 | 10 色 |
+| 12 | 紫色系 | 10 色 |
+| 13 | 粉色系 | 10 色 |
 
 ## 注意事项
 
-- 图片会自动调整到指定的网格尺寸
-- 颜色会自动匹配到游戏原生颜色
-- 白色（#FFFFFF）表示空白，不会导出到像素列表中
+- 图片会自动按目标比例中心裁剪，再缩放到网格尺寸
+- 颜色通过 RGB 欧几里得距离自动匹配到最接近的游戏原生颜色
+- 手机拍摄的照片会自动处理 EXIF 旋转信息
