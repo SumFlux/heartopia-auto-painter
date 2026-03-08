@@ -18,6 +18,7 @@ import sys
 import json
 import threading
 import time
+from typing import Optional, Tuple
 
 # 确保能导入项目根目录的 shared 包
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -137,6 +138,9 @@ class AutoPainterGUI(QMainWindow):
 
         # 像素数据
         self.pixel_data = None
+
+        # 绘画计时
+        self._paint_start_time: float = 0.0
 
         self._init_ui()
         self._load_calibration()
@@ -363,10 +367,11 @@ class AutoPainterGUI(QMainWindow):
         try:
             self.pixel_data = PixelData.from_json_file(file_path)
 
+            ratio_str = self.pixel_data.ratio or "unknown"
             self.data_label.setText(
-                f"已加载: {self.pixel_data.grid_width}x{self.pixel_data.grid_height} 矩阵"
+                f"已加载: {self.pixel_data.grid_width}x{self.pixel_data.grid_height} ({ratio_str})"
             )
-            self._log(f"[OK] 成功导入 {self.pixel_data.grid_width}x{self.pixel_data.grid_height} 像素数据")
+            self._log(f"[OK] 成功导入 {self.pixel_data.grid_width}x{self.pixel_data.grid_height} 像素数据 (比例: {ratio_str})")
 
             self.engine.load_pixel_data(self.pixel_data)
             self._log(f"  需要绘制: {self.engine.total_pixels} 个像素点")
@@ -375,6 +380,9 @@ class AutoPainterGUI(QMainWindow):
                 self._log(f"  [OK] 数据包含 colorId，将使用精确定位")
             else:
                 self._log(f"  [!] 数据不含 colorId，将使用最近邻匹配（可能有偏差）")
+
+            # 自动切换画布配置（按比例匹配）
+            self._auto_switch_canvas_profile()
 
             self._check_ready()
 
@@ -661,9 +669,13 @@ class AutoPainterGUI(QMainWindow):
     # ===== 固定坐标功能 =====
 
     def _save_fixed_positions(self):
-        """将当前标定保存为相对于游戏窗口的固定坐标"""
+        """将当前标定保存为相对于游戏窗口的固定坐标（按比例存储画布配置）"""
         if not self.locator.calibrated or not self.navigator.calibrated:
             QMessageBox.warning(self, "提示", "请先完成画布和调色板标定！")
+            return
+
+        if not self.pixel_data or not self.pixel_data.ratio:
+            QMessageBox.warning(self, "提示", "请先导入 JSON 数据（需要包含比例信息）！")
             return
 
         hwnd = find_game_window()
@@ -677,39 +689,50 @@ class AutoPainterGUI(QMainWindow):
             return
 
         window_offset = (rect[0], rect[1])
+        ratio = self.pixel_data.ratio
 
         # 计算相对坐标
         canvas_rel = self.locator.compute_relative_corners(window_offset)
         palette_rel = self.navigator.compute_relative(window_offset)
 
-        data = {
-            'canvas': {
-                **canvas_rel,
-                'grid_width': self.locator.grid_width,
-                'grid_height': self.locator.grid_height,
-                'offset_x': self.locator.offset_x,
-                'offset_y': self.locator.offset_y,
-            },
-            'palette': palette_rel,
-            'toolbar': None,  # 占位，后面由标定工具栏填入
+        canvas_profile = {
+            **canvas_rel,
+            'grid_width': self.locator.grid_width,
+            'grid_height': self.locator.grid_height,
+            'offset_x': self.locator.offset_x,
+            'offset_y': self.locator.offset_y,
         }
 
-        # 如果已有固定坐标文件且包含 toolbar 数据，保留它
+        # 读取现有数据（保留其他比例的配置和工具栏数据）
+        data = {'canvas_profiles': {}, 'palette': None, 'toolbar': None}
         if os.path.exists(FIXED_POSITIONS_FILE):
             try:
                 with open(FIXED_POSITIONS_FILE, 'r', encoding='utf-8') as f:
                     old_data = json.load(f)
-                if old_data.get('toolbar'):
-                    data['toolbar'] = old_data['toolbar']
+                # 兼容旧格式：迁移 canvas -> canvas_profiles
+                if 'canvas' in old_data and 'canvas_profiles' not in old_data:
+                    old_canvas = old_data['canvas']
+                    old_ratio = self._guess_ratio(old_canvas.get('grid_width', 0), old_canvas.get('grid_height', 0))
+                    if old_ratio:
+                        data['canvas_profiles'][old_ratio] = old_canvas
+                else:
+                    data['canvas_profiles'] = old_data.get('canvas_profiles', {})
+                data['palette'] = old_data.get('palette')
+                data['toolbar'] = old_data.get('toolbar')
             except Exception:
                 pass
+
+        # 存入当前比例的画布配置
+        data['canvas_profiles'][ratio] = canvas_profile
+        data['palette'] = palette_rel
 
         try:
             with open(FIXED_POSITIONS_FILE, 'w', encoding='utf-8') as f:
                 json.dump(data, f, indent=2, ensure_ascii=False)
-            self._log(f"[OK] 固定坐标已保存到 {os.path.basename(FIXED_POSITIONS_FILE)}")
+            profiles = list(data['canvas_profiles'].keys())
+            self._log(f"[OK] 固定坐标已保存 — 比例: {ratio} ({self.locator.grid_width}x{self.locator.grid_height})")
+            self._log(f"  已保存的画布配置: {', '.join(profiles)}")
             self._log(f"  窗口位置: {window_offset}")
-            self._log(f"  画布相对坐标: TL={canvas_rel['top_left']}, BR={canvas_rel['bottom_right']}")
 
             # 提示标定工具栏
             if not data.get('toolbar'):
@@ -720,6 +743,24 @@ class AutoPainterGUI(QMainWindow):
             self.clear_fixed_btn.setEnabled(True)
         except Exception as e:
             self._log(f"[!] 保存固定坐标失败: {e}")
+
+    @staticmethod
+    def _guess_ratio(grid_w: int, grid_h: int) -> Optional[str]:
+        """根据网格尺寸猜测比例"""
+        if grid_w <= 0 or grid_h <= 0:
+            return None
+        GRID_DIMENSIONS = {
+            '16:9': [[30, 18], [50, 28], [100, 56], [150, 84]],
+            '4:3': [[30, 24], [50, 38], [100, 76], [150, 114]],
+            '1:1': [[30, 30], [50, 50], [100, 100], [150, 150]],
+            '3:4': [[24, 30], [38, 50], [76, 100], [114, 150]],
+            '9:16': [[18, 30], [28, 50], [56, 100], [84, 150]],
+        }
+        for ratio, levels in GRID_DIMENSIONS.items():
+            for w, h in levels:
+                if w == grid_w and h == grid_h:
+                    return ratio
+        return None
 
     def _prompt_toolbar_calibration(self):
         """询问用户是否要标定工具栏位置"""
@@ -788,6 +829,10 @@ class AutoPainterGUI(QMainWindow):
             QMessageBox.warning(self, "提示", "没有保存的固定坐标，请先标定并保存")
             return
 
+        if not self.pixel_data or not self.pixel_data.ratio:
+            QMessageBox.warning(self, "提示", "请先导入 JSON 数据（需要比例信息）")
+            return
+
         hwnd = find_game_window()
         if not hwnd:
             QMessageBox.warning(self, "未找到游戏", "请确保心动小镇正在运行")
@@ -799,41 +844,45 @@ class AutoPainterGUI(QMainWindow):
             return
 
         window_offset = (rect[0], rect[1])
+        ratio = self.pixel_data.ratio
 
         try:
             with open(FIXED_POSITIONS_FILE, 'r', encoding='utf-8') as f:
                 data = json.load(f)
 
-            # 画布
-            canvas_data = data.get('canvas', {})
-            grid_w = canvas_data.get('grid_width', 0)
-            grid_h = canvas_data.get('grid_height', 0)
+            # 查找画布配置（优先用 canvas_profiles，兼容旧格式 canvas）
+            canvas_data = None
+            profiles = data.get('canvas_profiles', {})
+            if ratio in profiles:
+                canvas_data = profiles[ratio]
+            elif 'canvas' in data:
+                # 旧格式兼容
+                canvas_data = data['canvas']
+                self._log(f"  [i] 使用旧格式画布配置（建议重新保存固定坐标）")
 
-            if grid_w > 0 and grid_h > 0:
-                self.locator.calibrate_from_window(grid_w, grid_h, window_offset, canvas_data)
-                self.locator.set_offset(
-                    canvas_data.get('offset_x', 0),
-                    canvas_data.get('offset_y', 0)
-                )
-                self.offset_x_spin.setValue(self.locator.offset_x)
-                self.offset_y_spin.setValue(self.locator.offset_y)
-                self._log(f"[OK] 画布已自动标定 ({grid_w}x{grid_h})")
+            if canvas_data:
+                grid_w = canvas_data.get('grid_width', 0)
+                grid_h = canvas_data.get('grid_height', 0)
 
-            # 调色板
-            palette_data = data.get('palette')
-            if palette_data:
-                self.navigator.calibrate_from_window(window_offset, palette_data)
+                if grid_w > 0 and grid_h > 0:
+                    self.locator.calibrate_from_window(grid_w, grid_h, window_offset, canvas_data)
+                    self.locator.set_offset(
+                        canvas_data.get('offset_x', 0),
+                        canvas_data.get('offset_y', 0)
+                    )
+                    self.offset_x_spin.setValue(self.locator.offset_x)
+                    self.offset_y_spin.setValue(self.locator.offset_y)
+                    self._log(f"[OK] 画布已自动标定 — {ratio} ({grid_w}x{grid_h})")
+            else:
+                available = list(profiles.keys())
+                self._log(f"[!] 无比例 {ratio} 的画布配置（已有: {', '.join(available) if available else '无'}）")
+
+            # 调色板和工具栏
+            self._apply_palette_and_toolbar(data, window_offset)
+            if data.get('palette'):
                 self._log(f"[OK] 调色板已自动标定")
-
-            # 工具栏
-            toolbar_data = data.get('toolbar')
-            if toolbar_data:
-                wx, wy = window_offset
-                brush_pos = (wx + toolbar_data['brush'][0], wy + toolbar_data['brush'][1])
-                bucket_pos = (wx + toolbar_data['bucket'][0], wy + toolbar_data['bucket'][1])
-                self.engine.set_bucket_fill(True, brush_pos, bucket_pos)
-                self.bucket_fill_cb.setChecked(True)
-                self._log(f"[OK] 工具栏已定位（画笔: {brush_pos}, 油漆桶: {bucket_pos}）")
+            if data.get('toolbar'):
+                self._log(f"[OK] 工具栏已定位")
             else:
                 self._log(f"[!] 无工具栏数据，油漆桶不可用")
 
@@ -856,6 +905,75 @@ class AutoPainterGUI(QMainWindow):
 
         self.auto_fixed_btn.setEnabled(False)
         self.clear_fixed_btn.setEnabled(False)
+
+    def _auto_switch_canvas_profile(self):
+        """根据当前 pixel_data 的比例自动切换画布配置"""
+        if not self.pixel_data or not self.pixel_data.ratio:
+            return
+        if not os.path.exists(FIXED_POSITIONS_FILE):
+            return
+
+        ratio = self.pixel_data.ratio
+        try:
+            with open(FIXED_POSITIONS_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+
+            # 兼容旧格式：如果有 canvas 但没有 canvas_profiles，不处理
+            profiles = data.get('canvas_profiles', {})
+            if ratio in profiles:
+                canvas_data = profiles[ratio]
+                grid_w = canvas_data.get('grid_width', 0)
+                grid_h = canvas_data.get('grid_height', 0)
+
+                if grid_w == self.pixel_data.grid_width and grid_h == self.pixel_data.grid_height:
+                    # 尺寸完全匹配，自动应用
+                    hwnd = find_game_window()
+                    if hwnd:
+                        rect = get_window_rect(hwnd)
+                        if rect:
+                            window_offset = (rect[0], rect[1])
+                            self.locator.calibrate_from_window(grid_w, grid_h, window_offset, canvas_data)
+                            self.locator.set_offset(
+                                canvas_data.get('offset_x', 0),
+                                canvas_data.get('offset_y', 0)
+                            )
+                            self.offset_x_spin.setValue(self.locator.offset_x)
+                            self.offset_y_spin.setValue(self.locator.offset_y)
+                            self._log(f"  [OK] 自动切换画布配置: {ratio} ({grid_w}x{grid_h})")
+
+                            # 同时应用调色板和工具栏
+                            self._apply_palette_and_toolbar(data, window_offset)
+
+                            self._update_calib_status()
+                            self._save_calibration()
+                            self._check_ready()
+                            return
+
+                self._log(f"  [i] 找到比例 {ratio} 的画布配置，但尺寸不匹配 "
+                          f"(保存={grid_w}x{grid_h}, 当前={self.pixel_data.grid_width}x{self.pixel_data.grid_height})")
+            else:
+                available = list(profiles.keys())
+                if available:
+                    self._log(f"  [i] 无比例 {ratio} 的画布配置（已有: {', '.join(available)}），请手动标定")
+                # 没有任何 profile 就不提示
+
+        except Exception as e:
+            self._log(f"  [!] 自动切换画布配置失败: {e}")
+
+    def _apply_palette_and_toolbar(self, data: dict, window_offset: Tuple):
+        """应用调色板和工具栏配置（从固定坐标数据）"""
+        wx, wy = window_offset
+
+        palette_data = data.get('palette')
+        if palette_data:
+            self.navigator.calibrate_from_window(window_offset, palette_data)
+
+        toolbar_data = data.get('toolbar')
+        if toolbar_data:
+            brush_pos = (wx + toolbar_data['brush'][0], wy + toolbar_data['brush'][1])
+            bucket_pos = (wx + toolbar_data['bucket'][0], wy + toolbar_data['bucket'][1])
+            self.engine.set_bucket_fill(True, brush_pos, bucket_pos)
+            self.bucket_fill_cb.setChecked(True)
 
     def _on_bucket_fill_changed(self, state):
         """油漆桶开关变化"""
@@ -982,6 +1100,10 @@ class AutoPainterGUI(QMainWindow):
         self.start_btn.setEnabled(False)
         self.pause_btn.setEnabled(True)
         self.resume_btn.setEnabled(False)
+
+        now = time.strftime("%H:%M:%S")
+        self._paint_start_time = time.time()
+        self._log(f"[{now}] 开始绘画")
         self._log("请不要动鼠标...绘画即将开始")
 
         self.engine.start(resume_from_checkpoint=False)
@@ -1005,7 +1127,10 @@ class AutoPainterGUI(QMainWindow):
         self.start_btn.setEnabled(False)
         self.pause_btn.setEnabled(True)
         self.resume_btn.setEnabled(False)
-        self._log("从上次中断处继续绘画...")
+
+        now = time.strftime("%H:%M:%S")
+        self._paint_start_time = time.time()
+        self._log(f"[{now}] 从上次中断处继续绘画...")
 
         self.engine.start(resume_from_checkpoint=True)
 
@@ -1031,7 +1156,20 @@ class AutoPainterGUI(QMainWindow):
     # ===== 进度回调（通过信号在 GUI 线程执行）=====
 
     def _on_progress(self, drawn: int, total: int):
-        self.prog_label.setText(f"当前进度: {drawn}/{total}")
+        # 计算预估剩余时间
+        eta_str = ""
+        if drawn > 0 and self._paint_start_time > 0:
+            elapsed = time.time() - self._paint_start_time
+            speed = drawn / elapsed  # pixels per second
+            remaining = (total - drawn) / speed if speed > 0 else 0
+            if remaining >= 3600:
+                eta_str = f" — 预估剩余: {int(remaining // 3600)}时{int(remaining % 3600 // 60)}分"
+            elif remaining >= 60:
+                eta_str = f" — 预估剩余: {int(remaining // 60)}分{int(remaining % 60)}秒"
+            else:
+                eta_str = f" — 预估剩余: {int(remaining)}秒"
+
+        self.prog_label.setText(f"当前进度: {drawn}/{total}{eta_str}")
         if total > 0:
             self.progress_bar.setValue(int((drawn / total) * 100))
 
@@ -1053,7 +1191,17 @@ class AutoPainterGUI(QMainWindow):
         self.pause_btn.setEnabled(False)
 
     def _on_finished(self):
-        self._log("[DONE] 绘画完成！")
+        now = time.strftime("%H:%M:%S")
+        duration_str = ""
+        if self._paint_start_time > 0:
+            elapsed = time.time() - self._paint_start_time
+            if elapsed >= 3600:
+                duration_str = f"{int(elapsed // 3600)}时{int(elapsed % 3600 // 60)}分{int(elapsed % 60)}秒"
+            elif elapsed >= 60:
+                duration_str = f"{int(elapsed // 60)}分{int(elapsed % 60)}秒"
+            else:
+                duration_str = f"{int(elapsed)}秒"
+        self._log(f"[{now}] 结束绘画 — 用时: {duration_str}")
         self.start_btn.setEnabled(True)
         self.pause_btn.setEnabled(False)
         self.resume_btn.setEnabled(False)

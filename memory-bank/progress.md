@@ -126,3 +126,23 @@ converter 和 painter 各自维护独立的颜色数据副本（converter 28 行
 ### 修复 (`shared/palette.py`)
 1. 黑白灰组 index 4：`#e0dbd9` → `#feffff`
 2. `CANVAS_BACKGROUND_COLORS` 移除 `#feffff`，白色现在可正常绘制
+
+---
+
+## 2026-03-08：画布配置按比例存储 + 进度预估 + 绘画计时日志
+
+### 画布配置按比例绑定 (`auto_painter.py`, `fixed_positions.json`)
+- `fixed_positions.json` 结构变更：`canvas` → `canvas_profiles`（dict，key 为比例字符串如 `"3:4"`、`"1:1"`）
+- `palette` 和 `toolbar` 保持顶层共享（不随比例变化）
+- 导入 JSON 时自动根据比例匹配已保存的画布配置并应用
+- 保存固定坐标时按当前比例存入对应 key，保留其他比例的配置
+- 手动「从窗口自动标定」按钮也按比例查找配置
+- 兼容旧格式：检测到旧 `canvas` 字段时自动迁移
+
+### 进度条预估剩余时间
+- `_on_progress()` 根据已用时间和已画像素计算速度，推算剩余时间
+- 显示格式：`当前进度: 1234/5678 — 预估剩余: 12分30秒`
+
+### 绘画计时日志
+- 开始绘画时记录：`[HH:MM:SS] 开始绘画`
+- 结束绘画时记录：`[HH:MM:SS] 结束绘画 — 用时: XX分XX秒`
