@@ -30,7 +30,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QTimer, Signal, QObject
 
 from shared.pixel_data import PixelData
-from window_manager import find_game_window, bring_to_front
+from window_manager import find_game_window, bring_to_front, get_window_rect, capture_window
 from canvas_locator import CanvasLocator
 from palette_navigator import PaletteNavigator
 from paint_engine import PaintEngine
@@ -166,6 +166,13 @@ class AutoPainterGUI(QMainWindow):
         self.calib_canvas_btn.setToolTip("点击后切回游戏，按 Z 字形依次标定左上→右上→左下→右下四个角")
         self.calib_canvas_btn.clicked.connect(self._start_canvas_calibration)
         calib_layout.addWidget(self.calib_canvas_btn)
+
+        self.auto_detect_btn = QPushButton("🔍 自动检测画布（4角标记点）")
+        self.auto_detect_btn.setToolTip(
+            "先在游戏画布的4个角各画一个醒目颜色的像素，然后点此自动检测"
+        )
+        self.auto_detect_btn.clicked.connect(self._auto_detect_canvas)
+        calib_layout.addWidget(self.auto_detect_btn)
 
         self.calib_palette_btn = QPushButton("标定调色板（左右标签 + 色块区域，共 4 次 Enter）")
         self.calib_palette_btn.setToolTip("依次标定：标签最左 -> 标签最右 -> 色块左上第一格 -> 色块右下最后一格")
@@ -407,6 +414,79 @@ class AutoPainterGUI(QMainWindow):
             self._save_calibration()
             self.signals.calibration_done.emit("画布")
             QTimer.singleShot(0, lambda: self.calib_canvas_btn.setEnabled(True))
+
+        threading.Thread(target=_thread, daemon=True).start()
+
+    def _auto_detect_canvas(self):
+        """自动检测画布4角标记点"""
+        if self.pixel_data is None:
+            QMessageBox.warning(self, "提示", "请先导入 JSON 确定网格尺寸！")
+            return
+
+        self.auto_detect_btn.setEnabled(False)
+        self._log("--- 自动检测画布（4角标记点）---")
+        self._log("正在查找游戏窗口...")
+
+        def _thread():
+            try:
+                # 1. 找到游戏窗口
+                hwnd = find_game_window()
+                if not hwnd:
+                    self.signals.log_msg.emit("[!] 未找到游戏窗口，请确保心动小镇正在运行")
+                    QTimer.singleShot(0, lambda: self.auto_detect_btn.setEnabled(True))
+                    return
+
+                # 2. 窗口置前
+                bring_to_front(hwnd)
+                time.sleep(0.5)  # 等窗口稳定
+
+                # 3. 获取窗口坐标
+                rect = get_window_rect(hwnd)
+                if rect is None:
+                    self.signals.log_msg.emit("[!] 无法获取窗口坐标")
+                    QTimer.singleShot(0, lambda: self.auto_detect_btn.setEnabled(True))
+                    return
+
+                window_offset = (rect[0], rect[1])
+                self.signals.log_msg.emit(f"  窗口位置: ({rect[0]}, {rect[1]}) - ({rect[2]}, {rect[3]})")
+
+                # 4. 截图
+                self.signals.log_msg.emit("  正在截图...")
+                screenshot = capture_window(hwnd)
+                if screenshot is None:
+                    self.signals.log_msg.emit("[!] 截图失败")
+                    QTimer.singleShot(0, lambda: self.auto_detect_btn.setEnabled(True))
+                    return
+
+                self.signals.log_msg.emit(f"  截图尺寸: {screenshot.size}")
+
+                # 5. 检测标记点
+                self.signals.log_msg.emit("  正在检测标记点...")
+                tl, tr, bl, br = CanvasLocator.detect_markers(screenshot, window_offset)
+
+                self.signals.log_msg.emit(f"  [OK] 左上角: {tl}")
+                self.signals.log_msg.emit(f"  [OK] 右上角: {tr}")
+                self.signals.log_msg.emit(f"  [OK] 左下角: {bl}")
+                self.signals.log_msg.emit(f"  [OK] 右下角: {br}")
+
+                # 6. 标定
+                self.locator.calibrate(
+                    self.pixel_data.grid_width,
+                    self.pixel_data.grid_height,
+                    top_left=tl,
+                    bottom_right=br,
+                    top_right=tr,
+                    bottom_left=bl,
+                )
+                self._save_calibration()
+                self.signals.calibration_done.emit("画布")
+
+            except RuntimeError as e:
+                self.signals.log_msg.emit(f"[!] 检测失败: {e}")
+            except Exception as e:
+                self.signals.log_msg.emit(f"[!] 自动检测出错: {e}")
+            finally:
+                QTimer.singleShot(0, lambda: self.auto_detect_btn.setEnabled(True))
 
         threading.Thread(target=_thread, daemon=True).start()
 

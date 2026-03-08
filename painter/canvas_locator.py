@@ -7,6 +7,7 @@
 """
 
 from typing import Tuple, Dict, Optional
+import numpy as np
 
 
 class CanvasLocator:
@@ -143,3 +144,87 @@ class CanvasLocator:
         )
         self.offset_x = data.get('offset_x', 0)
         self.offset_y = data.get('offset_y', 0)
+
+    @staticmethod
+    def detect_markers(
+        screenshot: 'PIL.Image.Image',
+        window_offset: Tuple[int, int],
+    ) -> Tuple[Tuple[int, int], Tuple[int, int], Tuple[int, int], Tuple[int, int]]:
+        """
+        自动检测画布4角标记点的屏幕坐标。
+
+        用户需要事先在游戏画布的4个角各画1个醒目颜色的像素（如纯红/纯黑），
+        本方法从截图中自动识别这4个标记点的位置。
+
+        :param screenshot: 游戏窗口截图 (PIL Image)
+        :param window_offset: 窗口左上角的屏幕坐标 (x, y)
+        :return: (top_left, top_right, bottom_left, bottom_right) 各点的屏幕坐标
+        :raises RuntimeError: 找不到画布区域或某象限无标记
+        """
+        # Step 1: 找画布区域 — 背景色 #feffff = RGB(254,255,255)
+        img_array = np.array(screenshot)[:, :, :3]
+        bg = np.array([254, 255, 255])
+        bg_mask = np.all(np.abs(img_array.astype(int) - bg) <= 3, axis=2)
+
+        # 按行/列统计背景色像素数，超过30%阈值的行列构成画布区域
+        row_counts = np.sum(bg_mask, axis=1)
+        col_counts = np.sum(bg_mask, axis=0)
+        canvas_rows = np.where(row_counts > 0.3 * bg_mask.shape[1])[0]
+        canvas_cols = np.where(col_counts > 0.3 * bg_mask.shape[0])[0]
+
+        if len(canvas_rows) == 0 or len(canvas_cols) == 0:
+            raise RuntimeError("未找到画布区域，请确保游戏画布可见")
+
+        canvas_top, canvas_bottom = int(canvas_rows[0]), int(canvas_rows[-1])
+        canvas_left, canvas_right = int(canvas_cols[0]), int(canvas_cols[-1])
+
+        # Step 2: 在画布区域内找非背景像素
+        # 注意：标记点通常就画在画布最角落，不能收缩边距，否则会裁掉标记
+        ct = canvas_top
+        cb = canvas_bottom
+        cl = canvas_left
+        cr = canvas_right
+
+        canvas_bg = bg_mask[ct:cb + 1, cl:cr + 1]
+        marker_mask = ~canvas_bg  # 非背景 = 候选标记
+
+        canvas_h, canvas_w = marker_mask.shape
+
+        # Step 3: 四象限分区，每个象限找质心
+        mid_x = canvas_w // 2
+        mid_y = canvas_h // 2
+
+        quadrant_defs = {
+            '左上': (0, 0, mid_x, mid_y),
+            '右上': (mid_x, 0, canvas_w, mid_y),
+            '左下': (0, mid_y, mid_x, canvas_h),
+            '右下': (mid_x, mid_y, canvas_w, canvas_h),
+        }
+
+        centroids = {}
+        for name, (x1, y1, x2, y2) in quadrant_defs.items():
+            quad_mask = marker_mask[y1:y2, x1:x2]
+            ys, xs = np.where(quad_mask)
+            if len(xs) == 0:
+                raise RuntimeError(f"未在{name}找到标记点，请确保4个角都画了标记")
+            # 质心（相对于画布子区域）
+            cx = float(np.mean(xs)) + x1
+            cy = float(np.mean(ys)) + y1
+            centroids[name] = (cx, cy)
+
+        # Step 4: 图像坐标 → 屏幕坐标
+        # 质心坐标是相对于裁剪后的画布子区域(ct, cl)，需加回偏移
+        def to_screen(cx, cy):
+            img_x = cx + cl
+            img_y = cy + ct
+            screen_x = int(round(img_x)) + window_offset[0]
+            screen_y = int(round(img_y)) + window_offset[1]
+            return (screen_x, screen_y)
+
+        # Step 5: 返回 (top_left, top_right, bottom_left, bottom_right)
+        top_left = to_screen(*centroids['左上'])
+        top_right = to_screen(*centroids['右上'])
+        bottom_left = to_screen(*centroids['左下'])
+        bottom_right = to_screen(*centroids['右下'])
+
+        return (top_left, top_right, bottom_left, bottom_right)
