@@ -15,12 +15,14 @@ from typing import List, Dict, Tuple, Optional, Callable
 # 确保能导入 shared
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from collections import deque
+
 from shared.palette import CANVAS_BACKGROUND_COLORS, get_closest_color_group
 from shared.pixel_data import PixelData
 from mouse_input import InputBackend
 from canvas_locator import CanvasLocator
 from palette_navigator import PaletteNavigator
-from config import SPEED_PRESETS
+from config import SPEED_PRESETS, BUCKET_FILL_MIN_AREA
 
 
 class PaintEngine:
@@ -57,6 +59,15 @@ class PaintEngine:
         # 配置
         self.delay_ms = SPEED_PRESETS['normal']
 
+        # 油漆桶优化
+        self.use_bucket_fill = False
+        self.bucket_tool_pos: Optional[Tuple[int, int]] = None  # 油漆桶工具屏幕坐标
+        self.brush_tool_pos: Optional[Tuple[int, int]] = None   # 画笔工具屏幕坐标
+        # 像素颜色映射 (x, y) -> color_id，用于连通分析
+        self._pixel_color_map: Dict[Tuple[int, int], str] = {}
+        self._grid_width: int = 0
+        self._grid_height: int = 0
+
         # 回调函数（供 GUI 更新进度）
         self.on_progress: Optional[Callable[[int, int], None]] = None
         self.on_color_change: Optional[Callable[[str, int, int], None]] = None
@@ -75,6 +86,9 @@ class PaintEngine:
         self.drawn_pixels = 0
         self._completed_groups = []
         self._current_group_offset = 0
+        self._pixel_color_map = {}
+        self._grid_width = pixel_data.grid_width
+        self._grid_height = pixel_data.grid_height
 
         for p in pixel_data.pixels:
             px = p.get('x', 0)
@@ -97,6 +111,7 @@ class PaintEngine:
                 self.color_groups[group_key] = []
 
             self.color_groups[group_key].append((px, py))
+            self._pixel_color_map[(px, py)] = group_key
             self.total_pixels += 1
 
         # 蛇形排序：偶数行从左往右，奇数行从右往左
@@ -125,6 +140,106 @@ class PaintEngine:
         """设置绘画速度"""
         if preset_name in SPEED_PRESETS:
             self.delay_ms = SPEED_PRESETS[preset_name]
+
+    def set_bucket_fill(self, enabled: bool, brush_pos: Optional[Tuple[int, int]] = None,
+                        bucket_pos: Optional[Tuple[int, int]] = None):
+        """
+        启用/禁用油漆桶填充优化
+
+        :param enabled: 是否启用
+        :param brush_pos: 画笔工具屏幕坐标
+        :param bucket_pos: 油漆桶工具屏幕坐标
+        """
+        self.use_bucket_fill = enabled
+        self.brush_tool_pos = brush_pos
+        self.bucket_tool_pos = bucket_pos
+
+    def _find_connected_components(self, group_key: str, coords: List[Tuple[int, int]]) -> List[List[Tuple[int, int]]]:
+        """
+        对同色像素进行连通区域分析（4-连通）
+
+        :param group_key: 颜色 ID
+        :param coords: 该颜色所有像素坐标
+        :return: 连通区域列表，每个区域是坐标列表
+        """
+        coord_set = set(coords)
+        visited = set()
+        components = []
+
+        for start in coords:
+            if start in visited:
+                continue
+
+            # BFS 洪水填充
+            component = []
+            queue = deque([start])
+            visited.add(start)
+
+            while queue:
+                x, y = queue.popleft()
+                component.append((x, y))
+
+                for nx, ny in [(x+1, y), (x-1, y), (x, y+1), (x, y-1)]:
+                    if (nx, ny) in coord_set and (nx, ny) not in visited:
+                        visited.add((nx, ny))
+                        queue.append((nx, ny))
+
+            components.append(component)
+
+        return components
+
+    def _classify_boundary_interior(self, component: List[Tuple[int, int]], group_key: str
+                                    ) -> Tuple[List[Tuple[int, int]], List[Tuple[int, int]]]:
+        """
+        将连通区域的像素分为边界像素和内部像素
+
+        边界像素：4-邻域中存在不同颜色的像素（或位于画布边缘）
+        内部像素：4-邻域全部是同色
+
+        :return: (boundary_pixels, interior_pixels)
+        """
+        comp_set = set(component)
+        boundary = []
+        interior = []
+
+        for x, y in component:
+            is_boundary = False
+            for nx, ny in [(x+1, y), (x-1, y), (x, y+1), (x, y-1)]:
+                # 画布边缘算边界
+                if nx < 0 or ny < 0 or nx >= self._grid_width or ny >= self._grid_height:
+                    is_boundary = True
+                    break
+                # 邻居不在本区域
+                if (nx, ny) not in comp_set:
+                    # 邻居是不同颜色（或背景）
+                    neighbor_color = self._pixel_color_map.get((nx, ny))
+                    if neighbor_color != group_key:
+                        is_boundary = True
+                        break
+
+            if is_boundary:
+                boundary.append((x, y))
+            else:
+                interior.append((x, y))
+
+        # 蛇形排序
+        boundary.sort(key=lambda c: (c[1], c[0] if c[1] % 2 == 0 else -c[0]))
+        interior.sort(key=lambda c: (c[1], c[0] if c[1] % 2 == 0 else -c[0]))
+
+        return boundary, interior
+
+    def _switch_tool(self, tool: str):
+        """
+        切换到画笔或油漆桶工具
+
+        :param tool: 'brush' 或 'bucket'
+        """
+        if tool == 'brush' and self.brush_tool_pos:
+            self.backend.click(self.brush_tool_pos[0], self.brush_tool_pos[1], press_duration=0.02)
+            time.sleep(0.15)
+        elif tool == 'bucket' and self.bucket_tool_pos:
+            self.backend.click(self.bucket_tool_pos[0], self.bucket_tool_pos[1], press_duration=0.02)
+            time.sleep(0.15)
 
     def pause(self):
         if self.is_running and not self.is_paused:
@@ -191,6 +306,11 @@ class PaintEngine:
 
             delay_sec = self.delay_ms / 1000.0
 
+            # 判断是否可用油漆桶模式
+            bucket_mode = (self.use_bucket_fill and
+                           self.brush_tool_pos is not None and
+                           self.bucket_tool_pos is not None)
+
             for color_idx, group_key in enumerate(self.sorted_group_keys):
                 # 断点续画：跳过已完成的组
                 if group_key in self._completed_groups:
@@ -213,35 +333,23 @@ class PaintEngine:
 
                 time.sleep(0.15)
 
-                # 逐点绘制
                 coords_list = self.color_groups[group_key]
                 start_offset = self._current_group_offset if group_key not in self._completed_groups else 0
                 self._current_group_offset = 0  # 只有第一个未完成组需要 offset
 
-                for i in range(start_offset, len(coords_list)):
-                    self._wait_if_paused()
-                    if self._stop_event.is_set():
-                        # 保存断点
-                        self._current_group_offset = i
-                        self._save_progress()
+                if bucket_mode and start_offset == 0:
+                    # 油漆桶优化模式：按连通区域处理
+                    stopped = self._paint_group_with_bucket(group_key, coords_list, delay_sec)
+                    if stopped:
+                        break
+                else:
+                    # 传统逐点模式（含断点续画偏移）
+                    stopped = self._paint_group_sequential(group_key, coords_list, start_offset, delay_sec)
+                    if stopped:
                         break
 
-                    px, py = coords_list[i]
-                    screen_x, screen_y = self.locator.get_screen_pos(px, py)
-                    self.backend.click(screen_x, screen_y, press_duration=0.015)
-
-                    self.drawn_pixels += 1
-                    if self.on_progress:
-                        self.on_progress(self.drawn_pixels, self.total_pixels)
-
-                    time.sleep(delay_sec)
-                else:
-                    # for 正常结束（没有 break），标记此组完成
-                    self._completed_groups.append(group_key)
-                    continue
-
-                # 如果是 break 出来的（stop），外层也 break
-                break
+                # 正常完成该组
+                self._completed_groups.append(group_key)
 
         except Exception as e:
             if self.on_error:
@@ -252,6 +360,118 @@ class PaintEngine:
                 self.on_finished()
                 # 完成后清理进度文件
                 self._clear_progress()
+
+    def _paint_group_sequential(self, group_key: str, coords_list: List[Tuple[int, int]],
+                                start_offset: int, delay_sec: float) -> bool:
+        """
+        逐点绘制一组颜色（传统模式）
+
+        :return: True 表示被中断（stop），False 表示正常完成
+        """
+        for i in range(start_offset, len(coords_list)):
+            self._wait_if_paused()
+            if self._stop_event.is_set():
+                self._current_group_offset = i
+                self._save_progress()
+                return True
+
+            px, py = coords_list[i]
+            screen_x, screen_y = self.locator.get_screen_pos(px, py)
+            self.backend.click(screen_x, screen_y, press_duration=0.015)
+
+            self.drawn_pixels += 1
+            if self.on_progress:
+                self.on_progress(self.drawn_pixels, self.total_pixels)
+
+            time.sleep(delay_sec)
+
+        return False
+
+    def _paint_group_with_bucket(self, group_key: str, coords_list: List[Tuple[int, int]],
+                                 delay_sec: float) -> bool:
+        """
+        使用油漆桶优化绘制一组颜色
+
+        策略：
+        1. 对同色像素做连通区域分析
+        2. 小区域（< BUCKET_FILL_MIN_AREA）→ 逐点画
+        3. 大区域 → 先画笔画边界，再油漆桶填内部
+
+        :return: True 表示被中断，False 表示正常完成
+        """
+        components = self._find_connected_components(group_key, coords_list)
+
+        # 确保当前是画笔工具
+        current_tool = 'brush'
+        self._switch_tool('brush')
+
+        for component in components:
+            if self._stop_event.is_set():
+                self._save_progress()
+                return True
+
+            if len(component) < BUCKET_FILL_MIN_AREA:
+                # 小区域：逐点画
+                if current_tool != 'brush':
+                    self._switch_tool('brush')
+                    current_tool = 'brush'
+
+                # 蛇形排序
+                sorted_comp = sorted(component, key=lambda c: (c[1], c[0] if c[1] % 2 == 0 else -c[0]))
+                for px, py in sorted_comp:
+                    self._wait_if_paused()
+                    if self._stop_event.is_set():
+                        self._save_progress()
+                        return True
+
+                    screen_x, screen_y = self.locator.get_screen_pos(px, py)
+                    self.backend.click(screen_x, screen_y, press_duration=0.015)
+                    self.drawn_pixels += 1
+                    if self.on_progress:
+                        self.on_progress(self.drawn_pixels, self.total_pixels)
+                    time.sleep(delay_sec)
+            else:
+                # 大区域：边界+填充
+                boundary, interior = self._classify_boundary_interior(component, group_key)
+
+                # 第一步：画笔画边界
+                if current_tool != 'brush':
+                    self._switch_tool('brush')
+                    current_tool = 'brush'
+
+                for px, py in boundary:
+                    self._wait_if_paused()
+                    if self._stop_event.is_set():
+                        self._save_progress()
+                        return True
+
+                    screen_x, screen_y = self.locator.get_screen_pos(px, py)
+                    self.backend.click(screen_x, screen_y, press_duration=0.015)
+                    self.drawn_pixels += 1
+                    if self.on_progress:
+                        self.on_progress(self.drawn_pixels, self.total_pixels)
+                    time.sleep(delay_sec)
+
+                # 第二步：油漆桶填充内部
+                if interior:
+                    self._switch_tool('bucket')
+                    current_tool = 'bucket'
+
+                    # 点击一个内部像素即可填充整个区域
+                    fill_px, fill_py = interior[0]
+                    screen_x, screen_y = self.locator.get_screen_pos(fill_px, fill_py)
+                    self.backend.click(screen_x, screen_y, press_duration=0.015)
+                    # 油漆桶一次填充所有内部像素
+                    self.drawn_pixels += len(interior)
+                    if self.on_progress:
+                        self.on_progress(self.drawn_pixels, self.total_pixels)
+                    time.sleep(delay_sec * 2)  # 填充可能需要稍长的等待
+
+        # 结束后确保切回画笔
+        if current_tool != 'brush':
+            self._switch_tool('brush')
+
+        return False
 
     # ===== 断点续画：进度持久化 =====
 

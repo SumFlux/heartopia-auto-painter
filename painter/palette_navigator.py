@@ -189,3 +189,23 @@ class PaletteNavigator:
                 blocks_top_left=tuple(btl),
                 blocks_bottom_right=tuple(bbr),
             )
+
+    def compute_relative(self, window_offset: Tuple[int, int]) -> dict:
+        """计算调色板各点相对于窗口客户区的偏移"""
+        wx, wy = window_offset
+        return {
+            'left_tab': [self.left_tab[0] - wx, self.left_tab[1] - wy],
+            'right_tab': [self.right_tab[0] - wx, self.right_tab[1] - wy],
+            'blocks_top_left': [self.blocks_top_left[0] - wx, self.blocks_top_left[1] - wy],
+            'blocks_bottom_right': [self.blocks_bottom_right[0] - wx, self.blocks_bottom_right[1] - wy],
+        }
+
+    def calibrate_from_window(self, window_offset: Tuple[int, int], relative_data: dict):
+        """根据窗口位置 + 固定的窗口内相对坐标自动标定"""
+        wx, wy = window_offset
+        self.calibrate(
+            left_tab=(wx + relative_data['left_tab'][0], wy + relative_data['left_tab'][1]),
+            right_tab=(wx + relative_data['right_tab'][0], wy + relative_data['right_tab'][1]),
+            blocks_top_left=(wx + relative_data['blocks_top_left'][0], wy + relative_data['blocks_top_left'][1]),
+            blocks_bottom_right=(wx + relative_data['blocks_bottom_right'][0], wy + relative_data['blocks_bottom_right'][1]),
+        )

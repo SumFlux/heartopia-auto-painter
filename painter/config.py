@@ -41,3 +41,11 @@ SPEED_PRESETS = {
 HOTKEY_START_RESUME = 'f5'
 HOTKEY_PAUSE = 'f6'
 HOTKEY_STOP = 'f7'
+
+# ── 固定坐标配置文件 ──
+# 存储画布/调色板/工具栏相对于游戏窗口客户区的固定偏移量
+FIXED_POSITIONS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'fixed_positions.json')
+
+# ── 油漆桶优化 ──
+# 连通区域面积 >= 此阈值时使用油漆桶填充，否则逐点画
+BUCKET_FILL_MIN_AREA = 10

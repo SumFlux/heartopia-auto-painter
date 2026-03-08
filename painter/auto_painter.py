@@ -25,7 +25,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QComboBox, QFileDialog, QMessageBox,
-    QGroupBox, QGridLayout, QProgressBar, QTextEdit, QSpinBox
+    QGroupBox, QGridLayout, QProgressBar, QTextEdit, QSpinBox,
+    QCheckBox
 )
 from PySide6.QtCore import Qt, QTimer, Signal, QObject
 
@@ -35,7 +36,7 @@ from canvas_locator import CanvasLocator
 from palette_navigator import PaletteNavigator
 from paint_engine import PaintEngine
 from mouse_input import PynputBackend, InputBackend, create_backend
-from config import SPEED_PRESETS
+from config import SPEED_PRESETS, FIXED_POSITIONS_FILE, BUCKET_FILL_MIN_AREA
 
 
 # ===== 标定数据持久化路径 =====
@@ -199,6 +200,31 @@ class AutoPainterGUI(QMainWindow):
 
         calib_layout.addLayout(btn_row)
 
+        # 固定坐标按钮行
+        fixed_row = QHBoxLayout()
+
+        self.save_fixed_btn = QPushButton("📌 固定当前坐标")
+        self.save_fixed_btn.setToolTip(
+            "将当前标定保存为相对于游戏窗口的固定坐标，以后自动标定无需手动操作"
+        )
+        self.save_fixed_btn.clicked.connect(self._save_fixed_positions)
+        self.save_fixed_btn.setEnabled(False)
+        fixed_row.addWidget(self.save_fixed_btn)
+
+        self.auto_fixed_btn = QPushButton("⚡ 从窗口自动标定")
+        self.auto_fixed_btn.setToolTip("使用已保存的固定坐标 + 当前游戏窗口位置自动计算标定")
+        self.auto_fixed_btn.clicked.connect(self._apply_fixed_positions)
+        self.auto_fixed_btn.setEnabled(os.path.exists(FIXED_POSITIONS_FILE))
+        fixed_row.addWidget(self.auto_fixed_btn)
+
+        self.clear_fixed_btn = QPushButton("🗑 清除固定坐标")
+        self.clear_fixed_btn.setToolTip("删除已保存的固定坐标文件")
+        self.clear_fixed_btn.clicked.connect(self._clear_fixed_positions)
+        self.clear_fixed_btn.setEnabled(os.path.exists(FIXED_POSITIONS_FILE))
+        fixed_row.addWidget(self.clear_fixed_btn)
+
+        calib_layout.addLayout(fixed_row)
+
         # 微调偏移行
         offset_row = QHBoxLayout()
         offset_row.addWidget(QLabel("微调偏移:"))
@@ -246,21 +272,31 @@ class AutoPainterGUI(QMainWindow):
         self.speed_combo.setCurrentIndex(2)
         ctrl_layout.addWidget(self.speed_combo, 0, 1)
 
+        # 油漆桶优化开关
+        self.bucket_fill_cb = QCheckBox("🪣 油漆桶填充（大面积同色区域自动填充）")
+        self.bucket_fill_cb.setToolTip(
+            f"启用后，连通区域 ≥ {BUCKET_FILL_MIN_AREA} 像素时先画边界再油漆桶填充\n"
+            f"需要已保存固定坐标（含工具栏位置）"
+        )
+        self.bucket_fill_cb.setChecked(False)
+        self.bucket_fill_cb.stateChanged.connect(self._on_bucket_fill_changed)
+        ctrl_layout.addWidget(self.bucket_fill_cb, 1, 0, 1, 2)
+
         self.start_btn = QPushButton(">> 开始画画 (F5)")
         self.start_btn.setEnabled(False)
         self.start_btn.clicked.connect(self._start_painting)
-        ctrl_layout.addWidget(self.start_btn, 1, 0)
+        ctrl_layout.addWidget(self.start_btn, 2, 0)
 
         self.pause_btn = QPushButton("|| 暂停 (F6)")
         self.pause_btn.setEnabled(False)
         self.pause_btn.clicked.connect(self._pause_painting)
-        ctrl_layout.addWidget(self.pause_btn, 1, 1)
+        ctrl_layout.addWidget(self.pause_btn, 2, 1)
 
         self.resume_btn = QPushButton("~ 断点续画")
         self.resume_btn.setEnabled(False)
         self.resume_btn.setToolTip("从上次中断的位置继续绘画")
         self.resume_btn.clicked.connect(self._resume_painting)
-        ctrl_layout.addWidget(self.resume_btn, 2, 0, 1, 2)
+        ctrl_layout.addWidget(self.resume_btn, 3, 0, 1, 2)
 
         main_layout.addWidget(ctrl_group)
 
@@ -462,7 +498,10 @@ class AutoPainterGUI(QMainWindow):
 
                 # 5. 检测标记点
                 self.signals.log_msg.emit("  正在检测标记点...")
-                tl, tr, bl, br = CanvasLocator.detect_markers(screenshot, window_offset)
+                tl, tr, bl, br = CanvasLocator.detect_markers(
+                    screenshot, window_offset,
+                    on_log=lambda msg: self.signals.log_msg.emit(msg),
+                )
 
                 self.signals.log_msg.emit(f"  [OK] 左上角: {tl}")
                 self.signals.log_msg.emit(f"  [OK] 右上角: {tr}")
@@ -590,9 +629,10 @@ class AutoPainterGUI(QMainWindow):
         # 有任何一项标定了就可以清除
         self.recalib_btn.setEnabled(self.locator.calibrated or self.navigator.calibrated)
 
-        # 两项都标定了才能测试
+        # 两项都标定了才能测试 / 固定
         both_calibrated = self.locator.calibrated and self.navigator.calibrated
         self.test_calib_btn.setEnabled(both_calibrated)
+        self.save_fixed_btn.setEnabled(both_calibrated)
 
     def _clear_calibration(self):
         """清除所有标定数据"""
@@ -617,6 +657,234 @@ class AutoPainterGUI(QMainWindow):
         self._update_calib_status()
         self._check_ready()
         self._log("[OK] 标定数据已清除，请重新标定画布和调色板")
+
+    # ===== 固定坐标功能 =====
+
+    def _save_fixed_positions(self):
+        """将当前标定保存为相对于游戏窗口的固定坐标"""
+        if not self.locator.calibrated or not self.navigator.calibrated:
+            QMessageBox.warning(self, "提示", "请先完成画布和调色板标定！")
+            return
+
+        hwnd = find_game_window()
+        if not hwnd:
+            QMessageBox.warning(self, "未找到游戏", "请确保心动小镇正在运行")
+            return
+
+        rect = get_window_rect(hwnd)
+        if rect is None:
+            QMessageBox.warning(self, "错误", "无法获取窗口坐标")
+            return
+
+        window_offset = (rect[0], rect[1])
+
+        # 计算相对坐标
+        canvas_rel = self.locator.compute_relative_corners(window_offset)
+        palette_rel = self.navigator.compute_relative(window_offset)
+
+        data = {
+            'canvas': {
+                **canvas_rel,
+                'grid_width': self.locator.grid_width,
+                'grid_height': self.locator.grid_height,
+                'offset_x': self.locator.offset_x,
+                'offset_y': self.locator.offset_y,
+            },
+            'palette': palette_rel,
+            'toolbar': None,  # 占位，后面由标定工具栏填入
+        }
+
+        # 如果已有固定坐标文件且包含 toolbar 数据，保留它
+        if os.path.exists(FIXED_POSITIONS_FILE):
+            try:
+                with open(FIXED_POSITIONS_FILE, 'r', encoding='utf-8') as f:
+                    old_data = json.load(f)
+                if old_data.get('toolbar'):
+                    data['toolbar'] = old_data['toolbar']
+            except Exception:
+                pass
+
+        try:
+            with open(FIXED_POSITIONS_FILE, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+            self._log(f"[OK] 固定坐标已保存到 {os.path.basename(FIXED_POSITIONS_FILE)}")
+            self._log(f"  窗口位置: {window_offset}")
+            self._log(f"  画布相对坐标: TL={canvas_rel['top_left']}, BR={canvas_rel['bottom_right']}")
+
+            # 提示标定工具栏
+            if not data.get('toolbar'):
+                self._log(f"  [!] 如需使用油漆桶，还需标定工具栏（画笔+油漆桶位置）")
+                self._prompt_toolbar_calibration()
+
+            self.auto_fixed_btn.setEnabled(True)
+            self.clear_fixed_btn.setEnabled(True)
+        except Exception as e:
+            self._log(f"[!] 保存固定坐标失败: {e}")
+
+    def _prompt_toolbar_calibration(self):
+        """询问用户是否要标定工具栏位置"""
+        reply = QMessageBox.question(
+            self, "标定工具栏",
+            "要标定画笔和油漆桶的位置吗？\n\n"
+            "点击 Yes 后:\n"
+            "1. 切到游戏，鼠标停在【画笔工具】上，按 Enter\n"
+            "2. 鼠标停在【油漆桶工具】上，按 Enter",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes
+        )
+        if reply == QMessageBox.Yes:
+            self._start_toolbar_calibration()
+
+    def _start_toolbar_calibration(self):
+        """标定工具栏中画笔和油漆桶的位置"""
+        self._log("--- 开始标定工具栏 ---")
+        self._log("(1/2) 请切到游戏，鼠标停在【画笔工具】上，按 Enter")
+
+        def _thread():
+            # 1. 画笔
+            self._wait_for_enter()
+            brush_pos = self._mouse_getter.position()
+            self.signals.log_msg.emit(f"  [OK] 画笔工具: {brush_pos}")
+            time.sleep(0.3)
+
+            # 2. 油漆桶
+            self.signals.log_msg.emit("(2/2) 鼠标停在【油漆桶工具】上，按 Enter")
+            self._wait_for_enter()
+            bucket_pos = self._mouse_getter.position()
+            self.signals.log_msg.emit(f"  [OK] 油漆桶工具: {bucket_pos}")
+
+            # 读取当前窗口位置，计算相对坐标
+            hwnd = find_game_window()
+            if hwnd:
+                rect = get_window_rect(hwnd)
+                if rect:
+                    wx, wy = rect[0], rect[1]
+                    toolbar_data = {
+                        'brush': [brush_pos[0] - wx, brush_pos[1] - wy],
+                        'bucket': [bucket_pos[0] - wx, bucket_pos[1] - wy],
+                    }
+
+                    # 更新固定坐标文件
+                    if os.path.exists(FIXED_POSITIONS_FILE):
+                        try:
+                            with open(FIXED_POSITIONS_FILE, 'r', encoding='utf-8') as f:
+                                data = json.load(f)
+                            data['toolbar'] = toolbar_data
+                            with open(FIXED_POSITIONS_FILE, 'w', encoding='utf-8') as f:
+                                json.dump(data, f, indent=2, ensure_ascii=False)
+                            self.signals.log_msg.emit(f"  [OK] 工具栏位置已保存")
+                            self.signals.log_msg.emit(f"  画笔相对坐标: {toolbar_data['brush']}")
+                            self.signals.log_msg.emit(f"  油漆桶相对坐标: {toolbar_data['bucket']}")
+                        except Exception as e:
+                            self.signals.log_msg.emit(f"  [!] 保存工具栏位置失败: {e}")
+                    else:
+                        self.signals.log_msg.emit(f"  [!] 固定坐标文件不存在，请先保存固定坐标")
+
+        threading.Thread(target=_thread, daemon=True).start()
+
+    def _apply_fixed_positions(self):
+        """使用已保存的固定坐标 + 当前游戏窗口位置自动标定"""
+        if not os.path.exists(FIXED_POSITIONS_FILE):
+            QMessageBox.warning(self, "提示", "没有保存的固定坐标，请先标定并保存")
+            return
+
+        hwnd = find_game_window()
+        if not hwnd:
+            QMessageBox.warning(self, "未找到游戏", "请确保心动小镇正在运行")
+            return
+
+        rect = get_window_rect(hwnd)
+        if rect is None:
+            QMessageBox.warning(self, "错误", "无法获取窗口坐标")
+            return
+
+        window_offset = (rect[0], rect[1])
+
+        try:
+            with open(FIXED_POSITIONS_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+
+            # 画布
+            canvas_data = data.get('canvas', {})
+            grid_w = canvas_data.get('grid_width', 0)
+            grid_h = canvas_data.get('grid_height', 0)
+
+            if grid_w > 0 and grid_h > 0:
+                self.locator.calibrate_from_window(grid_w, grid_h, window_offset, canvas_data)
+                self.locator.set_offset(
+                    canvas_data.get('offset_x', 0),
+                    canvas_data.get('offset_y', 0)
+                )
+                self.offset_x_spin.setValue(self.locator.offset_x)
+                self.offset_y_spin.setValue(self.locator.offset_y)
+                self._log(f"[OK] 画布已自动标定 ({grid_w}x{grid_h})")
+
+            # 调色板
+            palette_data = data.get('palette')
+            if palette_data:
+                self.navigator.calibrate_from_window(window_offset, palette_data)
+                self._log(f"[OK] 调色板已自动标定")
+
+            # 工具栏
+            toolbar_data = data.get('toolbar')
+            if toolbar_data:
+                wx, wy = window_offset
+                brush_pos = (wx + toolbar_data['brush'][0], wy + toolbar_data['brush'][1])
+                bucket_pos = (wx + toolbar_data['bucket'][0], wy + toolbar_data['bucket'][1])
+                self.engine.set_bucket_fill(True, brush_pos, bucket_pos)
+                self.bucket_fill_cb.setChecked(True)
+                self._log(f"[OK] 工具栏已定位（画笔: {brush_pos}, 油漆桶: {bucket_pos}）")
+            else:
+                self._log(f"[!] 无工具栏数据，油漆桶不可用")
+
+            self._log(f"  窗口位置: {window_offset}")
+            self._update_calib_status()
+            self._save_calibration()
+            self._check_ready()
+
+        except Exception as e:
+            self._log(f"[!] 自动标定失败: {e}")
+
+    def _clear_fixed_positions(self):
+        """清除固定坐标文件"""
+        if os.path.exists(FIXED_POSITIONS_FILE):
+            try:
+                os.remove(FIXED_POSITIONS_FILE)
+                self._log("[OK] 固定坐标已清除")
+            except Exception as e:
+                self._log(f"[!] 清除失败: {e}")
+
+        self.auto_fixed_btn.setEnabled(False)
+        self.clear_fixed_btn.setEnabled(False)
+
+    def _on_bucket_fill_changed(self, state):
+        """油漆桶开关变化"""
+        enabled = bool(state)
+        if enabled:
+            # 检查是否有工具栏位置
+            if os.path.exists(FIXED_POSITIONS_FILE):
+                try:
+                    with open(FIXED_POSITIONS_FILE, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                    toolbar = data.get('toolbar')
+                    if toolbar:
+                        hwnd = find_game_window()
+                        if hwnd:
+                            rect = get_window_rect(hwnd)
+                            if rect:
+                                wx, wy = rect[0], rect[1]
+                                brush_pos = (wx + toolbar['brush'][0], wy + toolbar['brush'][1])
+                                bucket_pos = (wx + toolbar['bucket'][0], wy + toolbar['bucket'][1])
+                                self.engine.set_bucket_fill(True, brush_pos, bucket_pos)
+                                self._log("[OK] 油漆桶填充已启用")
+                                return
+                except Exception:
+                    pass
+            self._log("[!] 需要先保存固定坐标（含工具栏位置）才能使用油漆桶")
+            self.bucket_fill_cb.setChecked(False)
+        else:
+            self.engine.set_bucket_fill(False)
+            self._log("[OK] 油漆桶填充已禁用")
 
     def _test_calibration(self):
         """测试标定：沿画布边框画一圈黑红交替"""

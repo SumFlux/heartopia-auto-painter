@@ -10,6 +10,48 @@ from typing import Tuple, Dict, Optional
 import numpy as np
 
 
+def _connected_components(mask: np.ndarray) -> Tuple[np.ndarray, int]:
+    """
+    对二值 mask 做 4-连通分量标记（纯 numpy 实现，无需 scipy）。
+
+    优化：先提取非零像素坐标到 set，只遍历非零像素做 BFS，
+    避免遍历整个百万级像素的图像。
+
+    :param mask: bool 二维数组
+    :return: (labeled, num_features)
+        labeled: 与 mask 同形状的 int 数组，0=背景，1..N=各连通分量
+        num_features: 连通分量总数
+    """
+    h, w = mask.shape
+    labeled = np.zeros((h, w), dtype=np.int32)
+
+    # 提取所有非零像素坐标
+    ys, xs = np.where(mask)
+    if len(xs) == 0:
+        return labeled, 0
+
+    remaining = set(zip(ys.tolist(), xs.tolist()))
+    current_label = 0
+
+    while remaining:
+        current_label += 1
+        # BFS from an arbitrary unvisited pixel
+        seed = next(iter(remaining))
+        queue = [seed]
+        remaining.discard(seed)
+
+        while queue:
+            cy, cx = queue.pop()
+            labeled[cy, cx] = current_label
+            # 4-connected neighbors
+            for ny, nx in ((cy - 1, cx), (cy + 1, cx), (cy, cx - 1), (cy, cx + 1)):
+                if (ny, nx) in remaining:
+                    remaining.discard((ny, nx))
+                    queue.append((ny, nx))
+
+    return labeled, current_label
+
+
 class CanvasLocator:
     """画布定位器（4 角双线性插值）"""
 
@@ -119,6 +161,43 @@ class CanvasLocator:
         self.offset_x = 0
         self.offset_y = 0
 
+    def calibrate_from_window(self, grid_width: int, grid_height: int,
+                              window_offset: Tuple[int, int],
+                              relative_corners: Dict):
+        """
+        根据窗口位置 + 固定的窗口内相对坐标自动标定画布
+
+        :param grid_width: 像素矩阵宽度
+        :param grid_height: 像素矩阵高度
+        :param window_offset: 游戏窗口客户区左上角屏幕坐标 (x, y)
+        :param relative_corners: 四角相对于窗口客户区的偏移 {
+            'top_left': [rx, ry], 'top_right': [rx, ry],
+            'bottom_left': [rx, ry], 'bottom_right': [rx, ry]
+        }
+        """
+        wx, wy = window_offset
+        tl = (wx + relative_corners['top_left'][0], wy + relative_corners['top_left'][1])
+        tr = (wx + relative_corners['top_right'][0], wy + relative_corners['top_right'][1])
+        bl = (wx + relative_corners['bottom_left'][0], wy + relative_corners['bottom_left'][1])
+        br = (wx + relative_corners['bottom_right'][0], wy + relative_corners['bottom_right'][1])
+        self.calibrate(grid_width, grid_height, top_left=tl, bottom_right=br,
+                       top_right=tr, bottom_left=bl)
+
+    def compute_relative_corners(self, window_offset: Tuple[int, int]) -> Dict:
+        """
+        计算当前标定的四角相对于窗口客户区左上角的偏移量
+
+        :param window_offset: 游戏窗口客户区左上角屏幕坐标 (x, y)
+        :return: 四角相对偏移字典
+        """
+        wx, wy = window_offset
+        return {
+            'top_left': [self.top_left[0] - wx, self.top_left[1] - wy],
+            'top_right': [self.top_right[0] - wx, self.top_right[1] - wy],
+            'bottom_left': [self.bottom_left[0] - wx, self.bottom_left[1] - wy],
+            'bottom_right': [self.bottom_right[0] - wx, self.bottom_right[1] - wy],
+        }
+
     def to_dict(self) -> Dict:
         """序列化为字典（用于持久化保存）"""
         return {
@@ -149,82 +228,120 @@ class CanvasLocator:
     def detect_markers(
         screenshot: 'PIL.Image.Image',
         window_offset: Tuple[int, int],
+        on_log=None,
     ) -> Tuple[Tuple[int, int], Tuple[int, int], Tuple[int, int], Tuple[int, int]]:
         """
-        自动检测画布4角标记点的屏幕坐标。
+        自动检测画布4角红色标记点的屏幕坐标。
 
-        用户需要事先在游戏画布的4个角各画1个醒目颜色的像素（如纯红/纯黑），
-        本方法从截图中自动识别这4个标记点的位置。
+        策略：直接在整个截图中搜索红色像素（R>180, G<80, B<80），
+        然后对红色像素做聚类（DBSCAN），找到4个簇的质心，
+        按几何位置分配为左上/右上/左下/右下。
+
+        不再依赖背景色检测画布区域，因此无论画布是空白还是已画满内容都能工作。
 
         :param screenshot: 游戏窗口截图 (PIL Image)
         :param window_offset: 窗口左上角的屏幕坐标 (x, y)
+        :param on_log: 可选日志回调 (str) -> None
         :return: (top_left, top_right, bottom_left, bottom_right) 各点的屏幕坐标
-        :raises RuntimeError: 找不到画布区域或某象限无标记
+        :raises RuntimeError: 找不到足够的红色标记簇
         """
-        # Step 1: 找画布区域 — 背景色 #feffff = RGB(254,255,255)
+        def _log(msg):
+            if on_log:
+                on_log(msg)
+
         img_array = np.array(screenshot)[:, :, :3]
-        bg = np.array([254, 255, 255])
-        bg_mask = np.all(np.abs(img_array.astype(int) - bg) <= 3, axis=2)
+        img_h, img_w = img_array.shape[:2]
+        _log(f"  截图尺寸: {img_w}x{img_h}")
 
-        # 按行/列统计背景色像素数，超过30%阈值的行列构成画布区域
-        row_counts = np.sum(bg_mask, axis=1)
-        col_counts = np.sum(bg_mask, axis=0)
-        canvas_rows = np.where(row_counts > 0.3 * bg_mask.shape[1])[0]
-        canvas_cols = np.where(col_counts > 0.3 * bg_mask.shape[0])[0]
+        # Step 1: 限定搜索区域 — 只在水平居中的 1200px 宽度内搜索，排除两侧 UI（如调色板）
+        search_w = min(1200, img_w)
+        margin = (img_w - search_w) // 2
+        search_left, search_right = margin, margin + search_w
+        _log(f"  搜索区域: x=[{search_left},{search_right}] (居中 {search_w}px)")
 
-        if len(canvas_rows) == 0 or len(canvas_cols) == 0:
-            raise RuntimeError("未找到画布区域，请确保游戏画布可见")
+        search_area = img_array[:, search_left:search_right, :]
+        r, g, b = search_area[:, :, 0], search_area[:, :, 1], search_area[:, :, 2]
+        red_mask_local = (r > 180) & (g < 80) & (b < 80)
 
-        canvas_top, canvas_bottom = int(canvas_rows[0]), int(canvas_rows[-1])
-        canvas_left, canvas_right = int(canvas_cols[0]), int(canvas_cols[-1])
+        # 构建全图大小的 mask（坐标需要加回 search_left 偏移）
+        red_mask = np.zeros((img_h, img_w), dtype=bool)
+        red_mask[:, search_left:search_right] = red_mask_local
 
-        # Step 2: 在画布区域内找非背景像素
-        # 注意：标记点通常就画在画布最角落，不能收缩边距，否则会裁掉标记
-        ct = canvas_top
-        cb = canvas_bottom
-        cl = canvas_left
-        cr = canvas_right
+        red_count = int(np.sum(red_mask))
+        _log(f"  红色像素总数: {red_count}")
 
-        canvas_bg = bg_mask[ct:cb + 1, cl:cr + 1]
-        marker_mask = ~canvas_bg  # 非背景 = 候选标记
+        if red_count == 0:
+            raise RuntimeError(
+                "截图中未找到红色像素，请确保在画布4个角各画了一个红色标记点"
+            )
 
-        canvas_h, canvas_w = marker_mask.shape
+        # 获取红色像素坐标
+        ys, xs = np.where(red_mask)
+        _log(f"  红色像素范围: x=[{int(xs.min())},{int(xs.max())}], y=[{int(ys.min())},{int(ys.max())}]")
 
-        # Step 3: 四象限分区，每个象限找质心
-        mid_x = canvas_w // 2
-        mid_y = canvas_h // 2
+        # Step 2: 聚类红色像素，找到4个标记点簇
+        # 对红色 mask 做连通分量标记（纯 numpy 实现，无需 scipy）
+        labeled, num_features = _connected_components(red_mask)
+        _log(f"  连通分量数: {num_features}")
 
-        quadrant_defs = {
-            '左上': (0, 0, mid_x, mid_y),
-            '右上': (mid_x, 0, canvas_w, mid_y),
-            '左下': (0, mid_y, mid_x, canvas_h),
-            '右下': (mid_x, mid_y, canvas_w, canvas_h),
-        }
+        if num_features < 4:
+            raise RuntimeError(
+                f"只找到 {num_features} 个红色区域，需要 4 个角标记点。"
+                f"请确保画布4个角都画了红色标记"
+            )
 
-        centroids = {}
-        for name, (x1, y1, x2, y2) in quadrant_defs.items():
-            quad_mask = marker_mask[y1:y2, x1:x2]
-            ys, xs = np.where(quad_mask)
-            if len(xs) == 0:
-                raise RuntimeError(f"未在{name}找到标记点，请确保4个角都画了标记")
-            # 质心（相对于画布子区域）
-            cx = float(np.mean(xs)) + x1
-            cy = float(np.mean(ys)) + y1
-            centroids[name] = (cx, cy)
+        # 计算每个连通分量的质心和面积
+        clusters = []
+        for i in range(1, num_features + 1):
+            cy, cx = np.where(labeled == i)
+            area = len(cx)
+            centroid_x = float(np.mean(cx))
+            centroid_y = float(np.mean(cy))
+            clusters.append({
+                'id': i,
+                'area': area,
+                'cx': centroid_x,
+                'cy': centroid_y,
+            })
+
+        # 按面积排序，取最大的 4 个（标记点应该是最醒目的红色区域）
+        clusters.sort(key=lambda c: c['area'], reverse=True)
+
+        # 日志输出前几个簇的信息
+        for c in clusters[:min(8, len(clusters))]:
+            _log(f"  簇#{c['id']}: 面积={c['area']}, 质心=({c['cx']:.1f}, {c['cy']:.1f})")
+
+        top4 = clusters[:4]
+        if len(top4) < 4:
+            raise RuntimeError(f"红色区域不足4个（找到{len(top4)}个）")
+
+        _log(f"  选取最大的4个簇: {[c['id'] for c in top4]}")
+
+        # Step 3: 按几何位置分配四角
+        # 先按 y 排序分成上下两组，再在每组内按 x 排序分左右
+        top4.sort(key=lambda c: c['cy'])
+        upper = sorted(top4[:2], key=lambda c: c['cx'])  # y 较小的两个 = 上方
+        lower = sorted(top4[2:], key=lambda c: c['cx'])  # y 较大的两个 = 下方
+
+        tl_img = (upper[0]['cx'], upper[0]['cy'])
+        tr_img = (upper[1]['cx'], upper[1]['cy'])
+        bl_img = (lower[0]['cx'], lower[0]['cy'])
+        br_img = (lower[1]['cx'], lower[1]['cy'])
+
+        _log(f"  图像坐标 — 左上:({tl_img[0]:.1f},{tl_img[1]:.1f}) "
+             f"右上:({tr_img[0]:.1f},{tr_img[1]:.1f}) "
+             f"左下:({bl_img[0]:.1f},{bl_img[1]:.1f}) "
+             f"右下:({br_img[0]:.1f},{br_img[1]:.1f})")
 
         # Step 4: 图像坐标 → 屏幕坐标
-        # 质心坐标是相对于裁剪后的画布子区域(ct, cl)，需加回偏移
-        def to_screen(cx, cy):
-            img_x = cx + cl
-            img_y = cy + ct
+        def to_screen(img_x, img_y):
             screen_x = int(round(img_x)) + window_offset[0]
             screen_y = int(round(img_y)) + window_offset[1]
             return (screen_x, screen_y)
 
-        # Step 5: 返回 (top_left, top_right, bottom_left, bottom_right)
-        top_left = to_screen(*centroids['左上'])
-        top_right = to_screen(*centroids['右上'])
-        bottom_left = to_screen(*centroids['左下'])
-        bottom_right = to_screen(*centroids['右下'])
+        top_left = to_screen(*tl_img)
+        top_right = to_screen(*tr_img)
+        bottom_left = to_screen(*bl_img)
+        bottom_right = to_screen(*br_img)
 
         return (top_left, top_right, bottom_left, bottom_right)
