@@ -27,7 +27,7 @@ from typing import Dict, List, Tuple
 COLOR_GROUPS: List[Tuple[str, List[str]]] = [
     # 组 0 - 黑白灰 (6色)
     ("黑白灰", [
-        '#051616', '#434747', '#828484', '#b9b7b6', '#e0dbd9', '#a8978e',
+        '#051616', '#434747', '#828484', '#b9b7b6', '#feffff', '#a8978e',
     ]),
     # 组 1 - 红色系 (10色)
     ("红色系", [
@@ -185,4 +185,4 @@ def get_closest_color_group(target_hex: str) -> Tuple[int, int]:
 # ======================================================
 #  画布背景色（这些颜色不需要绘制）
 # ======================================================
-CANVAS_BACKGROUND_COLORS = frozenset({'#feffff', 'transparent', 'x', 'y'})
+CANVAS_BACKGROUND_COLORS = frozenset({'transparent', 'x', 'y'})
