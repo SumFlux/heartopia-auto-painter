@@ -45,3 +45,7 @@ examples/*.jpg
 examples/*.png
 examples/*.jpeg
 !examples/sample.jpg
+
+temp/
+JsonOutput/
+converter/Test_images/
