@@ -179,7 +179,8 @@ class PaintEngine:
                 x, y = queue.popleft()
                 component.append((x, y))
 
-                for nx, ny in [(x+1, y), (x-1, y), (x, y+1), (x, y-1)]:
+                for nx, ny in [(x+1,y),(x-1,y),(x,y+1),(x,y-1),
+                               (x+1,y+1),(x+1,y-1),(x-1,y+1),(x-1,y-1)]:
                     if (nx, ny) in coord_set and (nx, ny) not in visited:
                         visited.add((nx, ny))
                         queue.append((nx, ny))
@@ -204,7 +205,8 @@ class PaintEngine:
 
         for x, y in component:
             is_boundary = False
-            for nx, ny in [(x+1, y), (x-1, y), (x, y+1), (x, y-1)]:
+            for nx, ny in [(x+1,y),(x-1,y),(x,y+1),(x,y-1),
+                           (x+1,y+1),(x+1,y-1),(x-1,y+1),(x-1,y-1)]:
                 # 画布边缘算边界
                 if nx < 0 or ny < 0 or nx >= self._grid_width or ny >= self._grid_height:
                     is_boundary = True
@@ -227,6 +229,37 @@ class PaintEngine:
         interior.sort(key=lambda c: (c[1], c[0] if c[1] % 2 == 0 else -c[0]))
 
         return boundary, interior
+
+    def _find_4connected_subregions(self, pixels: List[Tuple[int, int]]) -> List[List[Tuple[int, int]]]:
+        """
+        对像素列表做 4-连通子区域分析
+
+        游戏的油漆桶使用 4-连通填充，所以内部像素可能被边界像素
+        分割成多个不相连的子区域，每个子区域需要单独点击一次油漆桶。
+
+        :param pixels: 像素坐标列表
+        :return: 子区域列表，每个子区域是坐标列表
+        """
+        pixel_set = set(pixels)
+        visited = set()
+        regions = []
+
+        for start in pixels:
+            if start in visited:
+                continue
+            region = []
+            queue = deque([start])
+            visited.add(start)
+            while queue:
+                x, y = queue.popleft()
+                region.append((x, y))
+                for nx, ny in [(x+1,y),(x-1,y),(x,y+1),(x,y-1)]:
+                    if (nx, ny) in pixel_set and (nx, ny) not in visited:
+                        visited.add((nx, ny))
+                        queue.append((nx, ny))
+            regions.append(region)
+
+        return regions
 
     def _switch_tool(self, tool: str):
         """
@@ -453,19 +486,26 @@ class PaintEngine:
                     time.sleep(delay_sec)
 
                 # 第二步：油漆桶填充内部
+                # 内部像素可能被边界分割成多个 4-连通子区域，
+                # 游戏的油漆桶是 4-连通填充，所以每个子区域都要点一次
                 if interior:
                     self._switch_tool('bucket')
                     current_tool = 'bucket'
 
-                    # 点击一个内部像素即可填充整个区域
-                    fill_px, fill_py = interior[0]
-                    screen_x, screen_y = self.locator.get_screen_pos(fill_px, fill_py)
-                    self.backend.click(screen_x, screen_y, press_duration=0.015)
-                    # 油漆桶一次填充所有内部像素
-                    self.drawn_pixels += len(interior)
-                    if self.on_progress:
-                        self.on_progress(self.drawn_pixels, self.total_pixels)
-                    time.sleep(delay_sec * 2)  # 填充可能需要稍长的等待
+                    interior_regions = self._find_4connected_subregions(interior)
+                    for region in interior_regions:
+                        self._wait_if_paused()
+                        if self._stop_event.is_set():
+                            self._save_progress()
+                            return True
+
+                        fill_px, fill_py = region[0]
+                        screen_x, screen_y = self.locator.get_screen_pos(fill_px, fill_py)
+                        self.backend.click(screen_x, screen_y, press_duration=0.015)
+                        self.drawn_pixels += len(region)
+                        if self.on_progress:
+                            self.on_progress(self.drawn_pixels, self.total_pixels)
+                        time.sleep(delay_sec * 2)
 
         # 结束后确保切回画笔
         if current_tool != 'brush':
