@@ -8,6 +8,7 @@
 import os
 import sys
 import json
+import random
 import threading
 import time
 from typing import List, Dict, Tuple, Optional, Callable
@@ -329,6 +330,12 @@ class PaintEngine:
         while self.is_paused and not self._stop_event.is_set():
             time.sleep(0.1)
 
+    @staticmethod
+    def _jittered_delay(base_sec: float):
+        """带随机波动的延迟（±25%），防止游戏检测固定间隔脚本操作"""
+        jitter = base_sec * random.uniform(-0.25, 0.25)
+        time.sleep(max(0.005, base_sec + jitter))
+
     def _paint_loop(self):
         """主绘制循环（在工作线程中运行）"""
         try:
@@ -416,7 +423,7 @@ class PaintEngine:
             if self.on_progress:
                 self.on_progress(self.drawn_pixels, self.total_pixels)
 
-            time.sleep(delay_sec)
+            self._jittered_delay(delay_sec)
 
         return False
 
@@ -462,7 +469,7 @@ class PaintEngine:
                     self.drawn_pixels += 1
                     if self.on_progress:
                         self.on_progress(self.drawn_pixels, self.total_pixels)
-                    time.sleep(delay_sec)
+                    self._jittered_delay(delay_sec)
             else:
                 # 大区域：边界+填充
                 boundary, interior = self._classify_boundary_interior(component, group_key)
@@ -483,7 +490,7 @@ class PaintEngine:
                     self.drawn_pixels += 1
                     if self.on_progress:
                         self.on_progress(self.drawn_pixels, self.total_pixels)
-                    time.sleep(delay_sec)
+                    self._jittered_delay(delay_sec)
 
                 # 第二步：油漆桶填充内部
                 # 内部像素可能被边界分割成多个 4-连通子区域，
@@ -505,7 +512,7 @@ class PaintEngine:
                         self.drawn_pixels += len(region)
                         if self.on_progress:
                             self.on_progress(self.drawn_pixels, self.total_pixels)
-                        time.sleep(delay_sec * 2)
+                        self._jittered_delay(delay_sec * 2)
 
         # 结束后确保切回画笔
         if current_tool != 'brush':

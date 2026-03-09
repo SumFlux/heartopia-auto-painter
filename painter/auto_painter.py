@@ -229,6 +229,16 @@ class AutoPainterGUI(QMainWindow):
 
         calib_layout.addLayout(fixed_row)
 
+        # 工具栏标定按钮行
+        toolbar_row = QHBoxLayout()
+
+        self.calib_toolbar_btn = QPushButton("🔧 标定工具栏（画笔+油漆桶）")
+        self.calib_toolbar_btn.setToolTip("标定画笔和油漆桶工具在屏幕上的位置，用于油漆桶填充优化")
+        self.calib_toolbar_btn.clicked.connect(self._start_toolbar_calibration)
+        toolbar_row.addWidget(self.calib_toolbar_btn)
+
+        calib_layout.addLayout(toolbar_row)
+
         # 微调偏移行
         offset_row = QHBoxLayout()
         offset_row.addWidget(QLabel("微调偏移:"))
@@ -313,6 +323,9 @@ class AutoPainterGUI(QMainWindow):
 
         self.progress_bar = QProgressBar()
         self.progress_bar.setValue(0)
+        self.progress_bar.setStyleSheet(
+            "QProgressBar::chunk { background-color: #4CAF50; }"
+        )
         prog_layout.addWidget(self.progress_bar)
 
         color_row = QHBoxLayout()
@@ -734,10 +747,8 @@ class AutoPainterGUI(QMainWindow):
             self._log(f"  已保存的画布配置: {', '.join(profiles)}")
             self._log(f"  窗口位置: {window_offset}")
 
-            # 提示标定工具栏
             if not data.get('toolbar'):
-                self._log(f"  [!] 如需使用油漆桶，还需标定工具栏（画笔+油漆桶位置）")
-                self._prompt_toolbar_calibration()
+                self._log(f"  [!] 如需使用油漆桶，请点击「🔧 标定工具栏」按钮")
 
             self.auto_fixed_btn.setEnabled(True)
             self.clear_fixed_btn.setEnabled(True)
@@ -761,20 +772,6 @@ class AutoPainterGUI(QMainWindow):
                 if w == grid_w and h == grid_h:
                     return ratio
         return None
-
-    def _prompt_toolbar_calibration(self):
-        """询问用户是否要标定工具栏位置"""
-        reply = QMessageBox.question(
-            self, "标定工具栏",
-            "要标定画笔和油漆桶的位置吗？\n\n"
-            "点击 Yes 后:\n"
-            "1. 切到游戏，鼠标停在【画笔工具】上，按 Enter\n"
-            "2. 鼠标停在【油漆桶工具】上，按 Enter",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.Yes
-        )
-        if reply == QMessageBox.Yes:
-            self._start_toolbar_calibration()
 
     def _start_toolbar_calibration(self):
         """标定工具栏中画笔和油漆桶的位置"""
@@ -1169,7 +1166,7 @@ class AutoPainterGUI(QMainWindow):
             else:
                 eta_str = f" — 预估剩余: {int(remaining)}秒"
 
-        self.prog_label.setText(f"当前进度: {drawn}/{total}{eta_str}")
+        self.prog_label.setText(f"当前进度: {drawn}/{total} 色块{eta_str}")
         if total > 0:
             self.progress_bar.setValue(int((drawn / total) * 100))
 
