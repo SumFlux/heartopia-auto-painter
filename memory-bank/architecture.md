@@ -2,90 +2,96 @@
 
 ## 项目总览
 
-heartopia-auto-painter 是一个《心动小镇》游戏的自动像素画绘制工具，由两大子系统组成：
+heartopia-auto-painter 是一个《心动小镇》游戏的自动像素画绘制工具。
+
+当前正在进行**统一应用重构**，从旧的双系统架构迁移到单一 PySide6 桌面应用。
+
+### 新架构（进行中）
 
 ```
 heartopia-auto-painter/
-├── shared/                  ← 共享数据层（唯一真理源）
-│   ├── palette.py           ← 125 色调色板数据 + 工具函数
-│   └── pixel_data.py        ← PixelData JSON 契约类
-├── converter/               ← 图片→像素矩阵 转换器
-│   ├── heartopia_converter.py  ← 核心转换引擎
-│   └── gui.py               ← PySide6 转换器 GUI
-├── painter/                 ← 自动画画脚本
-│   ├── auto_painter.py      ← GUI 主程序入口
-│   ├── canvas_locator.py    ← 画布定位（4角双线性插值 + 红色标记自动检测）
-│   ├── paint_engine.py      ← 绘画引擎（蛇形遍历、断点续画、油漆桶优化）
-│   ├── palette_navigator.py ← 调色板导航（标签切换 + 色块点击）
-│   ├── mouse_input.py       ← 输入后端抽象层（PynputBackend / PostMessageBackend）
-│   ├── window_manager.py    ← 游戏窗口定位与截图
-│   └── config.py            ← painter 专属配置（薄封装，re-export shared.palette）
+├── heartopia_app/               ← 新统一包（python -m heartopia_app 启动）
+│   ├── __main__.py              ← 包入口
+│   ├── bootstrap.py             ← 启动引导（DPI、QApplication 初始化）
+│   ├── domain/                  ← 领域层
+│   │   ├── palette.py           ← 125 色调色板数据 + 工具函数
+│   │   ├── pixel_data.py        ← Pixel / PixelData 数据模型（含 JSON/CSV 序列化）
+│   │   ├── conversion.py        ← 图片转换引擎（ConversionRequest / Result / PixelArtConverter）
+│   │   ├── calibration.py       ← 标定数据模型（Canvas / Palette / Toolbar Calibration）
+│   │   └── paint_plan.py        ← 绘画计划模型（PaintGroup / PaintPlan）
+│   ├── application/             ← 应用层
+│   │   ├── app_state.py         ← AppSettings + WorkspaceState（全局共享状态）
+│   │   └── conversion_service.py ← 转换服务（包装 domain 逻辑）
+│   ├── infrastructure/          ← 基础设施层
+│   │   ├── constants.py         ← 应用名、文件名常量
+│   │   ├── paths.py             ← 应用数据目录（%LOCALAPPDATA%\heartopia-auto-painter）
+│   │   ├── settings_repository.py    ← 设置持久化
+│   │   ├── calibration_repository.py ← 标定数据持久化
+│   │   └── session_repository.py     ← 绘画会话持久化
+│   └── ui/                      ← UI 层
+│       ├── main_window.py       ← 主窗口（QTabWidget 标签页切换）
+│       └── pages/
+│           ├── convert_page.py      ← 转换页（完整功能）
+│           ├── calibration_page.py  ← 标定页（UI 就位，核心功能待迁移）
+│           ├── paint_page.py        ← 绘画页（UI 就位，核心功能待迁移）
+│           └── settings_page.py     ← 设置页（完整功能）
+├── converter/               ← [旧] 图片转换器（待退役）
+├── painter/                 ← [旧] 自动画画脚本（待退役）
+├── shared/                  ← [旧] 共享数据层（已迁移到 domain/）
 ├── JsonOutput/              ← converter 输出的 JSON 文件
-└── memory-bank/             ← 项目记忆库（本目录）
+└── memory-bank/             ← 项目记忆库
+```
+
+### 旧架构（待退役）
+
+```
+converter/                ← 独立图片转换器（gui.py + heartopia_converter.py）
+painter/                  ← 独立画画脚本（auto_painter.py + paint_engine.py + ...）
+shared/                   ← 共享数据层（palette.py + pixel_data.py）
 ```
 
 ---
 
-## Converter 模块
+## 新架构分层说明
 
-### 图片量化转换器 (`heartopia_converter.py`)
-- **定位**：图片分析与处理引擎，解析用户图片以符合游戏画板需求。
-- **色彩空间约束**：游戏共 13 组调色系（当前项目维护 125 个可用颜色），底层使用 `shared.palette` 作为唯一真理表，配合 `colorId` 作为唯一标识。
-- **数据流协议**：导出 `{'x': X, 'y': Y, 'color': HEX, 'colorId': 'GroupIndex-ColorIndex'}`，使架构从颜色检索模式变为基于 UI 排布的数据绑定模式。
+### Domain 层
+- **palette.py** — 125 色唯一数据源。`COLOR_GROUPS`（13 组）→ 自动派生 `FLAT_COLORS`、`COLOR_ID_MAP`、`HEX_TO_GROUP`、`PALETTE_RGB`
+- **pixel_data.py** — 类型化 `Pixel` dataclass + `PixelData` 模型，支持 JSON/CSV 序列化
+- **conversion.py** — 图片量化转换引擎，支持中心裁剪、EXIF、增强、Floyd-Steinberg 抖动
+- **calibration.py** — 标定数据模型（CanvasCalibration / PaletteCalibration / ToolbarCalibration）
 
-### GUI 界面 (`gui.py`)
-- 提供图像增强预处理（饱和度/对比度/锐度滑块）
-- Floyd-Steinberg 误差扩散抖动算法，改善色阶过渡
+### Application 层
+- **app_state.py** — `AppSettings`（应用配置）+ `WorkspaceState`（运行时共享状态）
+- **conversion_service.py** — 转换服务包装
 
----
+### Infrastructure 层
+- **paths.py** — 应用数据统一存储在 `%LOCALAPPDATA%\heartopia-auto-painter`
+- **repositories** — 设置 / 标定 / 会话的 JSON 持久化
 
-## Painter 模块
-
-### 坐标与点击模拟 (`mouse_input.py`)
-技术选型经历三次迭代：
-1. ~~`pyautogui`~~：被 Unity 引擎屏蔽（只移动不点击）
-2. ~~`ctypes.windll.user32.SendInput`~~：C 内存对齐问题 + 高 DPI 坐标映射崩溃
-3. **`pynput`（最终方案）**：安全的物理鼠标级模拟，配合 `SetProcessDpiAwareness(1)` 实现 1:1 坐标映射
-
-架构：
-```
-mouse_input.py
-├── InputBackend (ABC)       ← 抽象接口：click / move / get_position
-├── PynputBackend            ← 默认：物理鼠标移动（屏幕绝对坐标）
-├── PostMessageBackend       ← 实验性：Win32 消息投递（窗口客户区坐标）
-└── create_backend()         ← 工厂函数
-```
-
-### 画布定位 (`canvas_locator.py`)
-- **手动标定**：4 角双线性插值，支持非矩形画布
-- **自动检测**：在截图居中 1200px 区域内搜索红色像素（R>180, G<80, B<80），BFS 连通分量聚类，取最大 4 簇按几何位置分配四角
-- 全局偏移微调 + 窗口相对坐标持久化（`fixed_positions.json`，画布按比例分 profile）
-
-### 绘画引擎 (`paint_engine.py`)
-- 蛇形遍历（偶数行右→左，奇数行左→右）
-- 断点续画（`paint_progress.json`）
-- 油漆桶填充优化：
-  - 4-连通 BFS 分组 + 4-邻域边界判定（与游戏桶填充语义一致）
-  - 内部像素做 4-连通子区域分析（匹配游戏油漆桶行为），每个子区域单独点击
-  - 连通区域 ≥ 30 像素时自动使用油漆桶，小区域逐点画
-
-### GUI 主程序 (`auto_painter.py`)
-- 数据导入：加载 JSON 后自动根据比例匹配画布配置
-- 固定坐标：按比例存储画布配置（`canvas_profiles`），调色板/工具栏共享
-- 绘画控制：速度预设、油漆桶开关、断点续画
-- 进度显示：预估剩余时间（基于实时绘画速度）
-- 日志：带时间戳的开始/结束记录，含总用时统计
-- 4 次点击标定（标签左右 + 色块区域左上右下）
-- 2 列 × 5 行布局自动计算 10 个色块中心坐标
-- 标签翻页 + 色块点击
-
-### 共享数据层 (`shared/`)
-- **`palette.py`**：125 色唯一数据源。`COLOR_GROUPS`（13 组）→ 自动派生 `FLAT_COLORS`、`COLOR_ID_MAP`、`HEX_TO_GROUP`、`PALETTE_RGB`
-- **`pixel_data.py`**：`PixelData` 类封装 JSON 读写 + 字段校验
+### UI 层
+- **main_window.py** — 4 标签页主窗口（转换 / 标定 / 绘画 / 设置）
+- **convert_page.py** — 完整转换功能（选图、参数、转换、预览、导出）
+- **calibration_page.py** — 标定 UI 框架（功能待接入旧逻辑）
+- **paint_page.py** — 绘画控制 UI 框架（功能待接入旧逻辑）
+- **settings_page.py** — 设置管理
 
 ---
 
-## 遗留事项
-1. `PostMessageBackend` 仅骨架代码，心动小镇是否响应 PostMessage 鼠标消息未实测
-2. 多显示器 / 高 DPI 缩放场景下的坐标准确性仍是已知痛点
-3. 物理鼠标占用桌面指针，游戏失焦会导致点击落在窗口外
+## 关键改进
+
+1. **消除 `sys.path.insert(...)` 反模式** — 全部使用包内导入
+2. **统一应用数据目录** — 不再在代码目录存放运行时 JSON
+3. **typed 数据模型** — `Pixel` dataclass 替代原始 dict
+4. **GUI 无关的 domain** — 转换引擎不依赖 PySide6
+5. **单一入口** — `python -m heartopia_app`
+
+---
+
+## 遗留事项（待迁移）
+
+1. 画布标定功能（canvas_locator.py 逻辑待接入 calibration_page）
+2. 调色板标定功能（palette_navigator.py 逻辑待接入 calibration_page）
+3. 绘画引擎（paint_engine.py 逻辑待接入 paint_page）
+4. 输入后端（mouse_input.py 待迁移到 infrastructure）
+5. 窗口管理（window_manager.py 待迁移到 infrastructure）
+6. 旧入口退役（converter/gui.py、painter/auto_painter.py）

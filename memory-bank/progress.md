@@ -1,4 +1,41 @@
-## 2026-03-09：桶填充连通性修正 + 调色板去背景色 + README 分层整理
+## 2026-03-10：统一应用架构重构（Phase 1-3, 5）
+
+### 重构目标
+将 converter + painter + shared 收敛为单一 PySide6 桌面应用 `heartopia_app/`，四层架构（Domain / Application / Infrastructure / UI）。
+
+### 已完成
+1. **新包骨架** — `heartopia_app/` 目录结构，`python -m heartopia_app` 启动
+2. **Domain 层迁移**
+   - `palette.py` ← 从 `shared/palette.py` 迁移
+   - `pixel_data.py` ← 从 `shared/pixel_data.py` 升级，新增 typed `Pixel` dataclass
+   - `conversion.py` ← 从 `converter/heartopia_converter.py` 迁移，GUI 无关
+   - `calibration.py` — 新建标定数据模型
+   - `paint_plan.py` — 新建绘画计划模型
+3. **Application 层** — `AppSettings` / `WorkspaceState` / `ConversionService`
+4. **Infrastructure 层** — `paths.py`（统一 app-data 目录）、三个 Repository
+5. **UI 层** — `MainWindow`（4 标签页）+ 4 个 Page
+6. **Bootstrap** — DPI awareness、QApplication 初始化（提权/隐藏控制台默认关闭）
+
+### 修复记录
+- **Python 3.9 兼容** — 移除所有 `@dataclass(slots=True)`
+- **提权闪退** — `ShellExecuteW` 参数修正为 `-m heartopia_app`；`request_admin_on_launch` / `auto_hide_console` 默认改为 `False`
+- **转换卡住** — `ConvertPage` 调用 `result.preview_image()` / `result.stats()` 方法名不匹配，改为 `get_preview_image()` / `get_stats()`；给 `ConversionResult` 添加 `grid_width` / `grid_height` 属性和 `get_preview_image()` 方法
+- **左侧面板挤压** — 控制面板加 `QScrollArea` 包裹，最小宽度 340px；窗口默认 1280×900
+
+### 功能状态
+| 功能 | 状态 |
+|------|------|
+| 图片转换（选图/参数/转换/预览/导出 JSON+CSV） | ✅ 完整 |
+| 设置管理（保存/持久化） | ✅ 完整 |
+| 标定页 UI | ✅ 框架就位 |
+| 标定核心逻辑 | ❌ 待迁移 |
+| 绘画页 UI | ✅ 框架就位 |
+| 绘画核心逻辑 | ❌ 待迁移 |
+| 旧入口退役 | ❌ 待完成 |
+
+---
+
+
 
 ### 桶填充连通性修正 (`painter/paint_engine.py`)
 - 按用户确认，将桶填充相关分析统一为 **4 连通**
