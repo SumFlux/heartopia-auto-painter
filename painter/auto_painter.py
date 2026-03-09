@@ -1229,6 +1229,14 @@ def main():
             pass
         sys.exit(0)
 
+    # ===== 隐藏控制台窗口 =====
+    try:
+        hwnd_console = ctypes.windll.kernel32.GetConsoleWindow()
+        if hwnd_console:
+            ctypes.windll.user32.ShowWindow(hwnd_console, 0)  # SW_HIDE
+    except Exception:
+        pass
+
     # 强制 DPI 感知，确保坐标 1:1
     try:
         ctypes.windll.shcore.SetProcessDpiAwareness(1)
