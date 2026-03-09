@@ -6,8 +6,8 @@ from dataclasses import dataclass
 
 from PySide6.QtWidgets import QApplication
 
-from heartopia_app.application import ConversionService, WorkspaceState
-from heartopia_app.infrastructure import CalibrationRepository, SessionRepository, SettingsRepository, ensure_app_data_dir
+from heartopia_app.application import CalibrationService, ConversionService, WorkspaceState
+from heartopia_app.infrastructure import CalibrationRepository, SessionRepository, SettingsRepository, create_backend, ensure_app_data_dir
 from heartopia_app.ui.main_window import MainWindow
 
 
@@ -19,6 +19,7 @@ class BootstrapContext:
     calibration_repository: CalibrationRepository
     session_repository: SessionRepository
     conversion_service: ConversionService
+    calibration_service: CalibrationService
     main_window: MainWindow
 
 
@@ -88,6 +89,11 @@ def create_application() -> BootstrapContext:
     state.palette_calibration = palette
     state.toolbar_calibration = toolbar
 
+    # Create input backend and calibration service
+    backend = create_backend(settings.input_backend)
+    state.input_backend = backend
+    calibration_service = CalibrationService(backend)
+
     conversion_service = ConversionService()
     main_window = MainWindow(
         state=state,
@@ -95,6 +101,7 @@ def create_application() -> BootstrapContext:
         settings_repository=settings_repository,
         calibration_repository=calibration_repository,
         session_repository=session_repository,
+        calibration_service=calibration_service,
     )
 
     return BootstrapContext(
@@ -104,5 +111,6 @@ def create_application() -> BootstrapContext:
         calibration_repository=calibration_repository,
         session_repository=session_repository,
         conversion_service=conversion_service,
+        calibration_service=calibration_service,
         main_window=main_window,
     )

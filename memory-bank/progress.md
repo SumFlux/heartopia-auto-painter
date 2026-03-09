@@ -1,3 +1,26 @@
+## 2026-03-10：Phase 4 补丁 — 4 个 Bug / 功能改进
+
+### 问题 1: 标定按比例存储
+- `calibration_page.py`: 固定坐标 GroupBox 新增比例 `QComboBox`（16:9 / 4:3 / 1:1 / 3:4 / 9:16）
+- `_save_fixed_positions()`: `canvas` → `canvas_profiles[ratio]`，保留其他比例配置
+- `_apply_fixed_positions()`: 优先从 `canvas_profiles[ratio]` 查找，兼容旧 `canvas` 格式
+- `paint_page.py`: `_import_json()` 成功后自动尝试应用匹配比例的固定坐标
+
+### 问题 2: 油漆桶连通性 Bug
+- `paint_algorithms.py`: `find_connected_components()` 4-连通 → 8-连通（含对角线）
+- `classify_boundary_interior()` 4-邻域 → 8-邻域
+- `find_4connected_subregions()` 保持 4-连通不变（匹配游戏桶填充语义）
+
+### 问题 3: 测试标定简化 + 加速 + 热键中断
+- `calibration_service.py`: `test_border()` 改为只用黑色通刷，点击间隔 0.03s → 0.015s
+- `calibration_page.py`: 测试标定期间启动 pynput keyboard listener 监听 F7 中断
+
+### 问题 4: 断点续画手动指定起始点
+- `paint_session.py`: `PaintProgress` 新增 `from_pixel_offset(plan, pixel_offset)` classmethod
+- `paint_page.py`: 断点续画按钮旁新增 `QSpinBox`（范围 0 ~ total_pixels），支持手动输入起始像素
+
+---
+
 ## 2026-03-10：统一应用架构重构（Phase 1-3, 5）
 
 ### 重构目标

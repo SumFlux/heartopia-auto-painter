@@ -2,9 +2,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from heartopia_app.domain import CanvasCalibration, PaletteCalibration, PixelData, ToolbarCalibration
+
+if TYPE_CHECKING:
+    from heartopia_app.infrastructure.input_backend import InputBackend
 
 
 @dataclass
@@ -28,6 +31,7 @@ class WorkspaceState:
     canvas_calibration: CanvasCalibration = field(default_factory=CanvasCalibration)
     palette_calibration: PaletteCalibration = field(default_factory=PaletteCalibration)
     toolbar_calibration: ToolbarCalibration = field(default_factory=ToolbarCalibration)
+    input_backend: Optional[InputBackend] = None
     active_session_path: Optional[Path] = None
 
     @property

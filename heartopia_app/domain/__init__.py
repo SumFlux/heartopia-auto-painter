@@ -18,4 +18,12 @@ from .calibration import (
     PaletteCalibration,
     ToolbarCalibration,
 )
-from .paint_plan import PaintGroup, PaintPlan
+from .paint_plan import PaintGroup, PaintPlan, build_paint_plan
+from .paint_algorithms import (
+    snake_sort,
+    find_connected_components,
+    classify_boundary_interior,
+    find_4connected_subregions,
+    build_border_points,
+    detect_canvas_markers,
+)

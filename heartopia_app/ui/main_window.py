@@ -11,7 +11,7 @@ from heartopia_app.ui.pages.paint_page import PaintPage
 from heartopia_app.ui.pages.settings_page import SettingsPage
 
 if TYPE_CHECKING:
-    from heartopia_app.application import ConversionService, WorkspaceState
+    from heartopia_app.application import CalibrationService, ConversionService, WorkspaceState
     from heartopia_app.infrastructure import CalibrationRepository, SessionRepository, SettingsRepository
 
 
@@ -23,6 +23,7 @@ class MainWindow(QMainWindow):
         settings_repository: SettingsRepository,
         calibration_repository: CalibrationRepository,
         session_repository: SessionRepository,
+        calibration_service: CalibrationService,
     ):
         super().__init__()
         self.state = state
@@ -30,6 +31,7 @@ class MainWindow(QMainWindow):
         self.settings_repository = settings_repository
         self.calibration_repository = calibration_repository
         self.session_repository = session_repository
+        self.calibration_service = calibration_service
 
         self.setWindowTitle("Heartopia Auto Painter")
         self.setMinimumSize(1100, 800)
@@ -49,10 +51,13 @@ class MainWindow(QMainWindow):
         self.calibration_page = CalibrationPage(
             state=self.state,
             calibration_repository=self.calibration_repository,
+            calibration_service=self.calibration_service,
         )
         self.paint_page = PaintPage(
             state=self.state,
             session_repository=self.session_repository,
+            calibration_service=self.calibration_service,
+            calibration_repository=self.calibration_repository,
         )
         self.settings_page = SettingsPage(
             state=self.state,
