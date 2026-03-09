@@ -180,8 +180,7 @@ class PaintEngine:
                 x, y = queue.popleft()
                 component.append((x, y))
 
-                for nx, ny in [(x+1,y),(x-1,y),(x,y+1),(x,y-1),
-                               (x+1,y+1),(x+1,y-1),(x-1,y+1),(x-1,y-1)]:
+                for nx, ny in [(x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)]:
                     if (nx, ny) in coord_set and (nx, ny) not in visited:
                         visited.add((nx, ny))
                         queue.append((nx, ny))
@@ -206,8 +205,7 @@ class PaintEngine:
 
         for x, y in component:
             is_boundary = False
-            for nx, ny in [(x+1,y),(x-1,y),(x,y+1),(x,y-1),
-                           (x+1,y+1),(x+1,y-1),(x-1,y+1),(x-1,y-1)]:
+            for nx, ny in [(x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)]:
                 # 画布边缘算边界
                 if nx < 0 or ny < 0 or nx >= self._grid_width or ny >= self._grid_height:
                     is_boundary = True

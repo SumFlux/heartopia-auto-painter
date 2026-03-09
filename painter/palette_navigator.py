@@ -150,7 +150,7 @@ class PaletteNavigator:
         选择指定颜色：先切换组，再点击组内色块
 
         :param target_group_idx: 目标颜色组号（0-12）
-        :param color_idx: 组内色块索引（0-9，组0为0-5）
+        :param color_idx: 组内色块索引（0-9，组0为0-4）
         """
         if not self.calibrated:
             raise RuntimeError("调色板尚未标定")

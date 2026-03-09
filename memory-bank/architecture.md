@@ -7,7 +7,7 @@ heartopia-auto-painter 是一个《心动小镇》游戏的自动像素画绘制
 ```
 heartopia-auto-painter/
 ├── shared/                  ← 共享数据层（唯一真理源）
-│   ├── palette.py           ← 126 色调色板数据 + 工具函数
+│   ├── palette.py           ← 125 色调色板数据 + 工具函数
 │   └── pixel_data.py        ← PixelData JSON 契约类
 ├── converter/               ← 图片→像素矩阵 转换器
 │   ├── heartopia_converter.py  ← 核心转换引擎
@@ -30,7 +30,7 @@ heartopia-auto-painter/
 
 ### 图片量化转换器 (`heartopia_converter.py`)
 - **定位**：图片分析与处理引擎，解析用户图片以符合游戏画板需求。
-- **色彩空间约束**：游戏共 13 组调色系（126 色），底层使用 `shared.palette` 作为唯一真理表，配合 `colorId` 作为唯一标识。
+- **色彩空间约束**：游戏共 13 组调色系（当前项目维护 125 个可用颜色），底层使用 `shared.palette` 作为唯一真理表，配合 `colorId` 作为唯一标识。
 - **数据流协议**：导出 `{'x': X, 'y': Y, 'color': HEX, 'colorId': 'GroupIndex-ColorIndex'}`，使架构从颜色检索模式变为基于 UI 排布的数据绑定模式。
 
 ### GUI 界面 (`gui.py`)
@@ -65,7 +65,7 @@ mouse_input.py
 - 蛇形遍历（偶数行右→左，奇数行左→右）
 - 断点续画（`paint_progress.json`）
 - 油漆桶填充优化：
-  - 8-连通 BFS 分组 + 8-邻域边界判定（密封轮廓）
+  - 4-连通 BFS 分组 + 4-邻域边界判定（与游戏桶填充语义一致）
   - 内部像素做 4-连通子区域分析（匹配游戏油漆桶行为），每个子区域单独点击
   - 连通区域 ≥ 30 像素时自动使用油漆桶，小区域逐点画
 
@@ -80,7 +80,7 @@ mouse_input.py
 - 标签翻页 + 色块点击
 
 ### 共享数据层 (`shared/`)
-- **`palette.py`**：126 色唯一数据源。`COLOR_GROUPS`（13 组）→ 自动派生 `FLAT_COLORS`、`COLOR_ID_MAP`、`HEX_TO_GROUP`、`PALETTE_RGB`
+- **`palette.py`**：125 色唯一数据源。`COLOR_GROUPS`（13 组）→ 自动派生 `FLAT_COLORS`、`COLOR_ID_MAP`、`HEX_TO_GROUP`、`PALETTE_RGB`
 - **`pixel_data.py`**：`PixelData` 类封装 JSON 读写 + 字段校验
 
 ---

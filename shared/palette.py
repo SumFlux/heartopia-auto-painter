@@ -6,11 +6,11 @@ shared/palette.py — 心动小镇调色板唯一数据源
 
 数据结构：
 - COLOR_GROUPS: 13 组颜色，每组包含 (组名, [hex颜色列表])
-  - 组 0（黑白灰）: 6 色
+  - 组 0（黑白灰）: 5 色
   - 组 1-12: 各 10 色
-  - 总计 126 色
+  - 总计 125 色
 
-- FLAT_COLORS: 所有颜色的一维列表（126 色，按组顺序排列）
+- FLAT_COLORS: 所有颜色的一维列表（125 色，按组顺序排列）
 
 - COLOR_ID_MAP: { hex_color -> "组号-组内索引" } 的反向映射
   - 组号从 0 开始（0 = 黑白灰，1 = 红色系 ...）
@@ -25,9 +25,9 @@ from typing import Dict, List, Tuple
 #  13 组调色板（来自游戏截图实际取色）
 # ======================================================
 COLOR_GROUPS: List[Tuple[str, List[str]]] = [
-    # 组 0 - 黑白灰 (6色)
+    # 组 0 - 黑白灰 (5色)
     ("黑白灰", [
-        '#051616', '#414545', '#808282', '#bebfbf', '#feffff', '#a8978e',#最后一个为背景色，画画用不上，也不能拿来上色
+        '#051616', '#414545', '#808282', '#bebfbf', '#feffff',
     ]),
     # 组 1 - 红色系 (10色)
     ("红色系", [
@@ -185,4 +185,4 @@ def get_closest_color_group(target_hex: str) -> Tuple[int, int]:
 # ======================================================
 #  画布背景色（这些颜色不需要绘制）
 # ======================================================
-CANVAS_BACKGROUND_COLORS = frozenset({'transparent', 'x', 'y'})
+CANVAS_BACKGROUND_COLORS = frozenset({'transparent', 'x', 'y', '#a8978e'})

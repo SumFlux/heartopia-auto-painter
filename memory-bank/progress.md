@@ -1,4 +1,27 @@
-# 进度记录
+## 2026-03-09：桶填充连通性修正 + 调色板去背景色 + README 分层整理
+
+### 桶填充连通性修正 (`painter/paint_engine.py`)
+- 按用户确认，将桶填充相关分析统一为 **4 连通**
+- `_find_connected_components()` 改为 4 邻域 BFS
+- `_classify_boundary_interior()` 改为 4 邻域边界判定
+- `_find_4connected_subregions()` 保持 4 连通
+- 结果：仅对角接触的像素会被视为两个区块，更符合游戏桶填充语义
+
+### 调色板修正 (`shared/palette.py`)
+- 用户手动重新截图校色后，更新多组颜色值
+- 删除黑白灰组最后一个旧背景色 `#a8978e`
+- 调色板总数从 **126 色** 改为 **125 色**
+- 保留 `#feffff` 作为可绘制白色
+- 为兼容旧 JSON，`CANVAS_BACKGROUND_COLORS` 仍保留 `#a8978e`，画画时会自动跳过
+- 当前 `COLOR_GROUPS` 已无重复 hex
+
+### README 分层整理
+- 根 `README.md` 改为只保留项目概览、结构、快速开始、调色板总说明
+- `converter/README.md` 聚焦转换参数、输出格式、125 色说明
+- `painter/README.md` 聚焦当前真实 GUI 流程：4 角画布标定、调色板标定、固定坐标、工具栏、油漆桶、断点续画
+- 修正旧文档中“画布 2 点标定”“126 色/组0有6色”等过时描述
+
+---
 
 ## 2026-03-07：图片转换器修复与增强
 
