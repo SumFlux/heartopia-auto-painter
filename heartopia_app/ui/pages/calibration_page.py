@@ -18,6 +18,14 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+
+SUBPIXEL_PHASES = {
+    "左上": (0, 0),
+    "右上": (1, 0),
+    "左下": (0, 1),
+    "右下": (1, 1),
+}
+
 if TYPE_CHECKING:
     from heartopia_app.application import WorkspaceState, CalibrationService
     from heartopia_app.infrastructure import CalibrationRepository
@@ -127,6 +135,27 @@ class CalibrationPage(QWidget):
 
         offset_row.addStretch()
         calib_layout.addLayout(offset_row)
+
+        phase_row = QHBoxLayout()
+        phase_row.addWidget(QLabel("子像素相位:"))
+        self.subpixel_phase_combo = QComboBox()
+        self.subpixel_phase_combo.addItems(list(SUBPIXEL_PHASES.keys()))
+        current_phase = next(
+            (
+                label for label, value in SUBPIXEL_PHASES.items()
+                if value == (
+                    self.state.canvas_calibration.subpixel_phase_x,
+                    self.state.canvas_calibration.subpixel_phase_y,
+                )
+            ),
+            "左上",
+        )
+        self.subpixel_phase_combo.setCurrentText(current_phase)
+        self.subpixel_phase_combo.currentTextChanged.connect(self._on_subpixel_phase_changed)
+        phase_row.addWidget(self.subpixel_phase_combo)
+        phase_row.addWidget(QLabel("用于快速测试 2×2 命中相位"))
+        phase_row.addStretch()
+        calib_layout.addLayout(phase_row)
 
         main_layout.addWidget(calib_group)
 
@@ -327,12 +356,14 @@ class CalibrationPage(QWidget):
         # Start F7 keyboard listener for interruption
         self._start_test_hotkey_listener()
 
+        phase_label = self.subpixel_phase_combo.currentText()
         self.calibration_service.test_border(
             canvas=self.state.canvas_calibration,
             palette=self.state.palette_calibration,
             on_log=self._signals.log.emit,
             on_done=self._signals.test_done.emit,
             stop_event=self._stop_event,
+            phase_label=phase_label,
         )
 
     def _on_offset_changed(self) -> None:
@@ -340,6 +371,12 @@ class CalibrationPage(QWidget):
         self.state.canvas_calibration.offset_y = self.offset_y_spin.value()
         self._save_calibration()
         self._log(f"[OK] 偏移已更新: X={self.offset_x_spin.value()}, Y={self.offset_y_spin.value()}")
+
+    def _on_subpixel_phase_changed(self, label: str) -> None:
+        phase_x, phase_y = SUBPIXEL_PHASES[label]
+        self.state.canvas_calibration.set_subpixel_phase(phase_x, phase_y)
+        self._save_calibration()
+        self._log(f"[OK] 子像素相位已更新: {label} ({phase_x}, {phase_y})")
 
     def _reset_offset(self) -> None:
         self.offset_x_spin.setValue(0)

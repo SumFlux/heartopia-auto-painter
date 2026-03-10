@@ -238,6 +238,67 @@ class PaintSession:
             self.backend.click(self.toolbar.bucket[0], self.toolbar.bucket[1], press_duration=0.02)
             time.sleep(0.15)
 
+    def _click_points(
+        self,
+        points: List[Tuple[int, int]],
+        delay_sec: float,
+    ) -> Tuple[bool, int]:
+        painted_count = 0
+        for px, py in points:
+            self._wait_if_paused()
+            if self._stop_event.is_set():
+                return True, painted_count
+
+            screen_x, screen_y = self.canvas.get_screen_pos(px, py)
+            self.backend.click(screen_x, screen_y, press_duration=0.015)
+            painted_count += 1
+
+            self._progress.drawn_pixels += 1
+            if self.on_progress:
+                self.on_progress(self._progress.drawn_pixels, self.plan.total_pixels)
+
+            self._jittered_delay(delay_sec)
+
+        return False, painted_count
+
+    def _click_points_with_left_bias(
+        self,
+        points: List[Tuple[int, int]],
+        delay_sec: float,
+    ) -> bool:
+        for px, py in points:
+            self._wait_if_paused()
+            if self._stop_event.is_set():
+                return True
+            screen_x, screen_y = self.canvas.get_screen_pos(px, py)
+            self.backend.click(screen_x - 1, screen_y, press_duration=0.015)
+            self._jittered_delay(delay_sec)
+            self._wait_if_paused()
+            if self._stop_event.is_set():
+                return True
+            self.backend.click(screen_x, screen_y, press_duration=0.015)
+            self._progress.drawn_pixels += 1
+            if self.on_progress:
+                self.on_progress(self._progress.drawn_pixels, self.plan.total_pixels)
+            self._jittered_delay(delay_sec)
+        return False
+
+    def _paint_points_with_segments(
+        self,
+        points: List[Tuple[int, int]],
+        delay_sec: float,
+        *,
+        click_startpoint: bool,
+        click_endpoint: bool,
+    ) -> Tuple[bool, int]:
+        """Paint points without dragging.
+
+        Drag-based painting has been disabled. We keep this method for call-site
+        compatibility, but it simply clicks points sequentially.
+        """
+        _ = (click_startpoint, click_endpoint)
+        return self._click_points(points, delay_sec)
+
     # ------------------------------------------------------------------ #
     #  Painting strategies                                                #
     # ------------------------------------------------------------------ #
@@ -248,19 +309,15 @@ class PaintSession:
         start_offset: int,
         delay_sec: float,
     ) -> bool:
-        """Paint a group pixel-by-pixel.  Returns ``True`` if stopped."""
-        for i in range(start_offset, len(group.coords)):
-            self._wait_if_paused()
-            if self._stop_event.is_set():
-                self._progress.current_group_offset = i
-                return True
-            px, py = group.coords[i]
-            screen_x, screen_y = self.canvas.get_screen_pos(px, py)
-            self.backend.click(screen_x, screen_y, press_duration=0.015)
-            self._progress.drawn_pixels += 1
-            if self.on_progress:
-                self.on_progress(self._progress.drawn_pixels, self.plan.total_pixels)
-            self._jittered_delay(delay_sec)
+        """Paint a group by clicking points sequentially. Returns ``True`` if stopped."""
+        remaining_points = group.coords[start_offset:]
+        if not remaining_points:
+            return False
+
+        stopped, painted_count = self._click_points(remaining_points, delay_sec)
+        if stopped:
+            self._progress.current_group_offset = start_offset + painted_count
+            return True
         return False
 
     def _paint_group_with_bucket(
@@ -273,6 +330,7 @@ class PaintSession:
             classify_boundary_interior,
             find_4connected_subregions,
             find_connected_components,
+            shrink_interior_away_from_boundary,
             snake_sort,
         )
 
@@ -290,16 +348,9 @@ class PaintSession:
                     self._switch_tool("brush")
                     current_tool = "brush"
                 sorted_comp = snake_sort(component)
-                for px, py in sorted_comp:
-                    self._wait_if_paused()
-                    if self._stop_event.is_set():
-                        return True
-                    screen_x, screen_y = self.canvas.get_screen_pos(px, py)
-                    self.backend.click(screen_x, screen_y, press_duration=0.015)
-                    self._progress.drawn_pixels += 1
-                    if self.on_progress:
-                        self.on_progress(self._progress.drawn_pixels, self.plan.total_pixels)
-                    self._jittered_delay(delay_sec)
+                stopped, _ = self._click_points(sorted_comp, delay_sec)
+                if stopped:
+                    return True
             else:
                 # Large component — boundary brush + interior bucket
                 boundary, interior = classify_boundary_interior(
@@ -309,38 +360,61 @@ class PaintSession:
                     self.plan.grid_width,
                     self.plan.grid_height,
                 )
+                safe_interior = shrink_interior_away_from_boundary(boundary, interior)
 
                 # Draw boundary with brush
                 if current_tool != "brush":
                     self._switch_tool("brush")
                     current_tool = "brush"
-                for px, py in boundary:
-                    self._wait_if_paused()
-                    if self._stop_event.is_set():
-                        return True
-                    screen_x, screen_y = self.canvas.get_screen_pos(px, py)
-                    self.backend.click(screen_x, screen_y, press_duration=0.015)
-                    self._progress.drawn_pixels += 1
-                    if self.on_progress:
-                        self.on_progress(self._progress.drawn_pixels, self.plan.total_pixels)
-                    self._jittered_delay(delay_sec)
+                stopped, _ = self._click_points(boundary, delay_sec)
+                if stopped:
+                    return True
 
-                # Fill interior with bucket
-                if interior:
-                    self._switch_tool("bucket")
-                    current_tool = "bucket"
-                    interior_regions = find_4connected_subregions(interior)
-                    for region in interior_regions:
-                        self._wait_if_paused()
-                        if self._stop_event.is_set():
-                            return True
-                        fill_px, fill_py = region[0]
-                        screen_x, screen_y = self.canvas.get_screen_pos(fill_px, fill_py)
-                        self.backend.click(screen_x, screen_y, press_duration=0.015)
-                        self._progress.drawn_pixels += len(region)
-                        if self.on_progress:
-                            self.on_progress(self._progress.drawn_pixels, self.plan.total_pixels)
-                        self._jittered_delay(delay_sec * 2)
+                # Paint ring pixels (between boundary and safe_interior) with brush
+                safe_set = set(safe_interior)
+                ring = [p for p in interior if p not in safe_set]
+                if ring:
+                    stopped, _ = self._click_points(ring, delay_sec)
+                    if stopped:
+                        return True
+
+                # Fill interior with bucket (large sub-regions) or brush (small ones)
+                if safe_interior:
+                    interior_regions = find_4connected_subregions(safe_interior)
+
+                    # Small sub-regions: brush click (bucket unreliable on tiny areas)
+                    small = [r for r in interior_regions if len(r) < 4]
+                    large = [r for r in interior_regions if len(r) >= 4]
+
+                    if small:
+                        if current_tool != "brush":
+                            self._switch_tool("brush")
+                            current_tool = "brush"
+                        for region in small:
+                            stopped, _ = self._click_points(region, delay_sec)
+                            if stopped:
+                                return True
+
+                    # Large sub-regions: bucket fill with left-bias double click
+                    if large:
+                        self._switch_tool("bucket")
+                        current_tool = "bucket"
+                        for region in large:
+                            self._wait_if_paused()
+                            if self._stop_event.is_set():
+                                return True
+                            fill_px, fill_py = region[0]
+                            screen_x, screen_y = self.canvas.get_screen_pos(fill_px, fill_py)
+                            self.backend.click(screen_x - 1, screen_y, press_duration=0.015)
+                            self._jittered_delay(delay_sec)
+                            self._wait_if_paused()
+                            if self._stop_event.is_set():
+                                return True
+                            self.backend.click(screen_x, screen_y, press_duration=0.015)
+                            self._progress.drawn_pixels += len(region)
+                            if self.on_progress:
+                                self.on_progress(self._progress.drawn_pixels, self.plan.total_pixels)
+                            self._jittered_delay(delay_sec * 2)
 
         # Restore brush before leaving
         if current_tool != "brush":

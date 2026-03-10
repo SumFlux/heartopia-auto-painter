@@ -17,6 +17,8 @@ class CanvasCalibration:
     bottom_right: Point = (0, 0)
     offset_x: int = 0
     offset_y: int = 0
+    subpixel_phase_x: int = 0
+    subpixel_phase_y: int = 0
     calibrated: bool = False
 
     def calibrate(self, grid_width: int, grid_height: int, top_left: Point, bottom_right: Point,
@@ -36,14 +38,20 @@ class CanvasCalibration:
         self.offset_x = offset_x
         self.offset_y = offset_y
 
+    def set_subpixel_phase(self, phase_x: int, phase_y: int) -> None:
+        self.subpixel_phase_x = 1 if phase_x else 0
+        self.subpixel_phase_y = 1 if phase_y else 0
+
     def get_screen_pos(self, px: int, py: int) -> Point:
         if not self.calibrated:
             raise RuntimeError("画布尚未标定")
         u = px / (self.grid_width - 1) if self.grid_width > 1 else 0.0
         v = py / (self.grid_height - 1) if self.grid_height > 1 else 0.0
         tl, tr, bl, br = self.top_left, self.top_right, self.bottom_left, self.bottom_right
-        screen_x = round((1 - u) * (1 - v) * tl[0] + u * (1 - v) * tr[0] + (1 - u) * v * bl[0] + u * v * br[0]) + self.offset_x
-        screen_y = round((1 - u) * (1 - v) * tl[1] + u * (1 - v) * tr[1] + (1 - u) * v * bl[1] + u * v * br[1]) + self.offset_y
+        base_x = (1 - u) * (1 - v) * tl[0] + u * (1 - v) * tr[0] + (1 - u) * v * bl[0] + u * v * br[0]
+        base_y = (1 - u) * (1 - v) * tl[1] + u * (1 - v) * tr[1] + (1 - u) * v * bl[1] + u * v * br[1]
+        screen_x = int(base_x) + self.offset_x + self.subpixel_phase_x
+        screen_y = int(base_y) + self.offset_y + self.subpixel_phase_y
         return screen_x, screen_y
 
     def compute_relative_corners(self, window_offset: Point) -> Dict[str, list[int]]:
@@ -57,6 +65,8 @@ class CanvasCalibration:
             'grid_height': self.grid_height,
             'offset_x': self.offset_x,
             'offset_y': self.offset_y,
+            'subpixel_phase_x': self.subpixel_phase_x,
+            'subpixel_phase_y': self.subpixel_phase_y,
         }
 
     @classmethod
@@ -72,6 +82,7 @@ class CanvasCalibration:
             bottom_left=(wx + relative_corners['bottom_left'][0], wy + relative_corners['bottom_left'][1]),
         )
         obj.set_offset(relative_corners.get('offset_x', 0), relative_corners.get('offset_y', 0))
+        obj.set_subpixel_phase(relative_corners.get('subpixel_phase_x', 0), relative_corners.get('subpixel_phase_y', 0))
         return obj
 
     def to_dict(self) -> Dict[str, object]:
@@ -84,6 +95,8 @@ class CanvasCalibration:
             'grid_height': self.grid_height,
             'offset_x': self.offset_x,
             'offset_y': self.offset_y,
+            'subpixel_phase_x': self.subpixel_phase_x,
+            'subpixel_phase_y': self.subpixel_phase_y,
         }
 
     @classmethod
@@ -98,6 +111,7 @@ class CanvasCalibration:
             bottom_left=tuple(data.get('bottom_left', (data['top_left'][0], data['bottom_right'][1]))),
         )
         obj.set_offset(int(data.get('offset_x', 0)), int(data.get('offset_y', 0)))
+        obj.set_subpixel_phase(int(data.get('subpixel_phase_x', 0)), int(data.get('subpixel_phase_y', 0)))
         return obj
 
 

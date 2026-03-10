@@ -1,3 +1,20 @@
+## 2026-03-11：绘制策略回退 — 全面禁用拖动，改为纯点击 + 桶填充左偏补偿
+
+### 背景
+拖动绘制在边框测试中有效，但迁移到正式绘制后，bucket boundary 的 snake_sort 点序不是连续轮廓，拖动无法保证封闭，导致桶填外溢。经多轮迭代后决定全面回退为纯点击。
+
+### 改动（`heartopia_app/application/paint_session.py`）
+1. **全面禁用 drag** — 所有绘制路径不再调用 `drag_path`，恢复逐点 click
+2. **桶填充左偏双击** — bucket 模式下每次桶工具点击前先点 `(x-1, y)` 再点 `(x, y)`
+3. **ring 像素补画** — `shrink_interior_away_from_boundary` 缩掉的那圈像素用 brush 补画，修复进度只到 87% 就显示完成的 bug
+4. **小子区域改用 brush** — safe_interior 中 <4 像素的子区域改用 brush 逐点 click，修复桶工具对极小区域不生效的问题
+5. 新增 `_click_points()` 通用点击辅助方法，返回 `(stopped, painted_count)` 支持 resume offset
+
+### 遗留
+- `CalibrationService.test_border()` 仍使用拖动（drag_path），后续需改为纯 click 并彻底删除 drag 相关代码
+
+---
+
 ## 2026-03-10：Phase 4 补丁 — 4 个 Bug / 功能改进
 
 ### 问题 1: 标定按比例存储

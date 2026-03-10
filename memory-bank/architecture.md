@@ -86,12 +86,14 @@ shared/                   ← 共享数据层（palette.py + pixel_data.py）
 5. **单一入口** — `python -m heartopia_app`
 
 ### 已验证的绘制稳定性结论（2026-03）
-- 连续边界的随机漏点，根因更接近“逐点 click 容易断边”，而不是单一全局 1px 相位错误。
-- 对连续的水平/竖直 4-连通像素段，优先使用拖动绘制；孤立单点继续保留 click。
-- 游戏对拖动识别更依赖真实鼠标移动事件；仅通过直接设置光标位置的跳点移动，可能出现“只在起点/拐角落点”。
-- 拖动过程中需要支持段内中断，并确保异常或中断时一定释放鼠标按键。
-- 拖动段末尾补一次终点 click，可稳定修复“整段已画出但最后差一格”的收尾问题。
-- 验证顺序应优先使用 `CalibrationService.test_border()`，确认稳定后再扩展到正式绘制流程。
+- 拖动绘制在边框测试中有效，但在正式绘制（尤其是 bucket boundary）中不够稳定，snake_sort 点序不是连续轮廓，拖动无法保证封闭。
+- **当前正式绘制已全面回退为逐点 click**，不再使用 drag_path。
+- 桶填充（bucket fill）策略：
+  - boundary 用 brush 逐点 click 封边
+  - `shrink_interior_away_from_boundary` 缩掉的 ring 像素也用 brush 补画（否则进度计数会缺失）
+  - safe_interior 大子区域（≥4 像素）用桶工具填充，每次点击前先点 (x-1, y) 再点 (x, y)（左偏 1px 双击补偿）
+  - safe_interior 小子区域（<4 像素）改用 brush 逐点 click（桶工具对极小区域不可靠）
+- **TODO**: `CalibrationService.test_border()` 仍使用拖动方式（drag_path），后续需改为纯 click 并彻底删除 drag 相关代码。
 
 ---
 
