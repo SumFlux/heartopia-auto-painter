@@ -232,6 +232,7 @@ class CalibrationService:
         on_log: Callable[[str], None],
         on_done: Callable[[], None],
         stop_event: threading.Event,
+        phase_label: str = "左上",
     ) -> None:
         """Draw a test border around the canvas (black-only).
 
@@ -242,11 +243,20 @@ class CalibrationService:
                 W = canvas.grid_width
                 H = canvas.grid_height
 
-                from heartopia_app.domain.paint_algorithms import build_border_points
+                from heartopia_app.domain.paint_algorithms import (
+                    build_border_points,
+                    split_into_straight_segments,
+                )
                 border_points = build_border_points(W, H)
+                segments = split_into_straight_segments(border_points)
                 total = len(border_points)
+                drag_segments = sum(1 for segment in segments if len(segment["points"]) >= 2)
+                point_segments = len(segments) - drag_segments
 
-                on_log(f"[测试标定] 边框共 {total} 个点，黑色通刷...")
+                on_log(f"[测试标定] 子像素相位={phase_label}，边框共 {total} 个点，黑色通刷...")
+                on_log(
+                    f"  共切分为 {len(segments)} 段：拖动段 {drag_segments}，单点段 {point_segments}"
+                )
                 on_log("  请在 3 秒内切换到游戏窗口...（F7 可中断）")
 
                 # Interruptible 3s wait
@@ -270,16 +280,40 @@ class CalibrationService:
                     time.sleep(0.35)
 
                 drawn = 0
-                for px, py in border_points:
+                for segment in segments:
                     if stop_event.is_set():
                         on_log("[测试标定] 已中止")
                         return
-                    screen_x, screen_y = canvas.get_screen_pos(px, py)
-                    self.backend.click(screen_x, screen_y, press_duration=0.015)
-                    drawn += 1
-                    time.sleep(0.015)
 
-                on_log(f"[测试标定] 完成！共绘制 {drawn} 个点")
+                    screen_points = [
+                        canvas.get_screen_pos(px, py)
+                        for px, py in segment["points"]
+                    ]
+
+                    if len(screen_points) >= 2:
+                        self.backend.drag_path(
+                            screen_points,
+                            press_delay=0.02,
+                            move_delay=0.002,
+                            release_delay=0.02,
+                            should_stop=stop_event.is_set,
+                        )
+                        if stop_event.is_set():
+                            on_log("[测试标定] 已中止")
+                            return
+                        end_x, end_y = screen_points[-1]
+                        self.backend.click(end_x, end_y, press_duration=0.015)
+                        drawn += len(screen_points)
+                        time.sleep(0.015)
+                    else:
+                        screen_x, screen_y = screen_points[0]
+                        self.backend.click(screen_x, screen_y, press_duration=0.015)
+                        drawn += 1
+                        time.sleep(0.015)
+
+                on_log(
+                    f"[测试标定] 完成！共绘制 {drawn} 个点，{drag_segments} 个拖动段，{point_segments} 个单点段"
+                )
                 on_log("  请检查游戏中边框是否完整覆盖画布四周")
 
             except Exception as e:

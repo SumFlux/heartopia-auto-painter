@@ -12,6 +12,7 @@ from typing import (
     Callable,
     Dict,
     List,
+    Literal,
     Optional,
     Set,
     Tuple,
@@ -110,6 +111,23 @@ def classify_boundary_interior(
     return boundary, interior
 
 
+def shrink_interior_away_from_boundary(
+    boundary: List[Tuple[int, int]],
+    interior: List[Tuple[int, int]],
+) -> List[Tuple[int, int]]:
+    """移除紧贴 boundary 的一圈 interior 像素，返回更安全的内部区域。"""
+    boundary_set: Set[Tuple[int, int]] = set(boundary)
+    safe_interior = [
+        (x, y)
+        for x, y in interior
+        if all(
+            (x + dx, y + dy) not in boundary_set
+            for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1))
+        )
+    ]
+    return snake_sort(safe_interior)
+
+
 # ---------------------------------------------------------------------------
 # 子区域分析
 # ---------------------------------------------------------------------------
@@ -143,6 +161,71 @@ def find_4connected_subregions(
 # ---------------------------------------------------------------------------
 # 校准用边框点
 # ---------------------------------------------------------------------------
+
+SegmentDirection = Literal["horizontal", "vertical", "point"]
+
+
+def split_into_straight_segments(
+    points: List[Tuple[int, int]],
+) -> List[Dict[str, object]]:
+    """按原始顺序将点序列切分为水平段、竖直段或单点。"""
+    if not points:
+        return []
+
+    def _direction(
+        start: Tuple[int, int],
+        end: Tuple[int, int],
+    ) -> Optional[Literal["horizontal", "vertical"]]:
+        dx = end[0] - start[0]
+        dy = end[1] - start[1]
+        if abs(dx) + abs(dy) != 1:
+            return None
+        if dx != 0:
+            return "horizontal"
+        return "vertical"
+
+    segments: List[Dict[str, object]] = []
+    current_points: List[Tuple[int, int]] = [points[0]]
+    current_direction: Optional[Literal["horizontal", "vertical"]] = None
+
+    def _flush() -> None:
+        nonlocal current_points, current_direction
+        if not current_points:
+            return
+        direction: SegmentDirection = current_direction or "point"
+        segments.append(
+            {
+                "direction": direction,
+                "points": current_points.copy(),
+            }
+        )
+        current_points = []
+        current_direction = None
+
+    for point in points[1:]:
+        step_direction = _direction(current_points[-1], point)
+        if step_direction is None:
+            _flush()
+            current_points = [point]
+            continue
+
+        if current_direction is None:
+            current_points.append(point)
+            current_direction = step_direction
+            continue
+
+        if step_direction != current_direction:
+            last_point = current_points[-1]
+            _flush()
+            current_points = [last_point, point]
+            current_direction = step_direction
+            continue
+
+        current_points.append(point)
+
+    _flush()
+    return segments
+
 
 def build_border_points(grid_w: int, grid_h: int) -> List[Tuple[int, int]]:
     """生成顺时针边框坐标序列，用于校准测试。
