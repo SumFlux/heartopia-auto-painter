@@ -249,7 +249,38 @@
 | 设置管理（保存/持久化） | ✅ 完整 |
 | 标定页 UI + 核心逻辑 | ✅ 完整（含 F7 中断、比例存储、网格同步） |
 | 绘画页 UI + 核心逻辑 | ✅ 完整（含断点续画、油漆桶、手动起点） |
-| 旧入口退役 | ❌ 待完成 |
+| 旧入口退役 | ✅ 已完成 |
+
+### 2026-03-11：旧 split architecture 正式退役
+
+### 背景
+仓库此前虽然已经以 `heartopia_app/` 作为统一桌面应用主架构，并通过 `python -m heartopia_app` 启动，但根 README、memory-bank 与仓库中的旧入口/旧实现代码仍让 `converter/ + painter/ + shared/` 看起来像是另一套仍可使用的正式路径。本轮目标是完成迁移收口，明确宣布旧架构退役。
+
+### 改动
+- 根 `README.md` 改为只介绍 `heartopia_app/`，并明确 `python -m heartopia_app` 是唯一官方启动方式
+- `memory-bank/architecture.md` 从“迁移中”改为“当前正式架构 + 已退役旧架构”叙事
+- 删除旧入口：
+  - `converter/gui.py`
+  - `converter/heartopia_converter.py`
+  - `painter/auto_painter.py`
+  - `painter/auto_painter_main.bat`
+- 删除旧运行时实现与旧共享层：
+  - `shared/__init__.py`
+  - `shared/palette.py`
+  - `shared/pixel_data.py`
+  - `painter/config.py`
+  - `painter/paint_engine.py`
+  - `painter/palette_navigator.py`
+  - `painter/canvas_locator.py`
+  - `painter/mouse_input.py`
+  - `painter/window_manager.py`
+- 退役旧子文档：`converter/README.md`、`painter/README.md`
+
+### 结果
+- 仓库只剩一个明确入口：`python -m heartopia_app`
+- 仓库主路径中不再保留旧 split architecture 的 runnable path
+- `heartopia_app` 不再依赖 `converter/`、`painter/`、`shared/` 的旧实现
+- 文档、memory-bank 与代码结构现在统一对齐到 `heartopia_app`
 
 ---
 

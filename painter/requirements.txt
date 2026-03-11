@@ -1,5 +1,0 @@
-pynput
-pywin32
-Pillow
-PySide6
-numpy<2
