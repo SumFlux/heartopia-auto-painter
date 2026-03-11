@@ -40,6 +40,14 @@ Thumbs.db
 *_heartopia.json
 *_heartopia.csv
 
+# Runtime data (old painter)
+painter/calibration.json
+painter/fixed_positions.json
+painter/paint_progress.json
+
+# Claude worktrees
+.claude/worktrees/
+
 # Test images
 examples/*.jpg
 examples/*.png

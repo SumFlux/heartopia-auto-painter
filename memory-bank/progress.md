@@ -1,4 +1,259 @@
-## 2026-03-09：桶填充连通性修正 + 调色板去背景色 + README 分层整理
+## 2026-03-11：补画后验证上下文失效修复 + 十字补画 + 错色纳入 repair
+
+### 背景
+当前手动“截图验证 → 补画”流程中，用户确认补画点击本身基本有效，真正问题是补画后的第二次截图验证仍沿用旧的页面级验证上下文/缓存状态，表现为像是补画没有应用到新的验证坐标，且重启应用后恢复正常。因此本轮重点不是扩大补画范围，而是最小改动修复验证失效机制，并顺手降低 repair 耗时。
+
+### 改动
+
+#### 1. 收紧验证结果有效性（`heartopia_app/ui/pages/paint_page.py`, `heartopia_app/ui/main_window.py`）
+- 保留现有 `VerificationThread + _last_verification_result + _verification_context_key` 主结构不变
+- 新增单独字段记录“最近一次验证结果生成时的 context key”，不再混用“当前页面 context”和“结果有效性”
+- 在以下时机主动清空验证缓存：
+  - 开始新的截图验证前
+  - 补画开始前
+  - 补画完成后
+  - 补画中断后
+  - 补画异常结束后
+- `MainWindow` 监听 tab 切换，回到“绘画”页时调用 `PaintPage.refresh_for_current_context()`，触发 UI 重新检查当前 context 并失效旧结果
+- 结果：标定页修改 offset / phase / calibration 后，旧截图验证结果不会继续被当作当前结果使用
+
+#### 2. repair-only 点击从九宫格改为十字补点（`heartopia_app/application/paint_session.py`）
+- 复用原有 repair-only 点击路径，不新增 executor
+- `_click_repair_nine_tap()` 的实际点击集合改为 5 点：中心 + 上下左右
+- 去掉 4 个对角补点
+- Paint 页日志文案同步从“九宫格补点”改为“十字补点”
+
+#### 3. repair 速度不再强制 `very_slow`（`heartopia_app/ui/pages/paint_page.py`）
+- repair 继续保持：
+  - `use_bucket_fill=False`
+  - brush-only
+- 速度改为复用当前 UI 速度选择
+- 若用户选择 `fast`，repair 保守钳制到 `normal`
+- 结果：repair 明显快于旧的 `very_slow + 九宫格`
+
+#### 4. 将 `wrong_palette_color` 纳入 repair 候选（`heartopia_app/application/post_paint_verifier.py`, `heartopia_app/ui/pages/paint_page.py`）
+- `VerificationResult.repair_candidates` 从只包含 `missing_background_like` 扩展为同时包含：
+  - `missing_background_like`
+  - `wrong_palette_color`
+- `uncertain` 仍明确排除
+- `build_repair_pixel_data()` 继续复用现有 mismatch → sparse PixelData 的逻辑，不额外新增修复流水线
+- UI / 日志文案从“补画白点 / 漏白点候选”放宽为更通用的“补画 / 可补画候选”
+
+### 验证
+- 对以下文件执行 `python -m compileall` 通过：
+  - `heartopia_app/ui/pages/paint_page.py`
+  - `heartopia_app/application/paint_session.py`
+  - `heartopia_app/application/post_paint_verifier.py`
+  - `heartopia_app/ui/main_window.py`
+- 预期行为：
+  - 补画后无需重启即可再次截图验证
+  - 标定改动后回到绘画页会自动使旧验证结果失效
+  - repair 点击从 9 次降为 5 次
+  - 错色点可进入 repair，`uncertain` 仍不自动修复
+
+---
+
+## 2026-03-11：截图验证改为手动按钮 + 画板区域预览 + 调色板归位时序修正
+
+### 背景
+原先的“画后截图验证 + 保守自动补画”第一版仍带有较强自动流程色彩，而且手动点击截图验证时会阻塞 UI；同时验证预览显示整张窗口，不利于人工只看画板区域。另一个实际使用问题是调色板从最后几页归位到第一页时，左翻页点击间隔太短，游戏来不及翻页，导致归位停在中间页。
+
+### 改动
+
+#### 1. PaintPage 改为纯手动验证/补画流程（`heartopia_app/ui/pages/paint_page.py`）
+- 移除主绘制完成后的自动验证、自动补画、补后自动终验主链路
+- 新增两个独立按钮：
+  - `截图验证`
+  - `补画白点`
+- 主绘制完成后恢复为普通完成提示；是否验证、是否补画完全由用户手动决定
+
+#### 2. 验证结果缓存 + UI 预览区
+- 在 Paint 页新增“验证预览”区域，复用 `QScrollArea + QLabel` 模式显示验证图
+- 缓存最近一次 `VerificationResult` 与预览图，仅当存在最近一次有效验证且包含 `missing_background_like` 候选时才允许点击“补画白点”
+- 当重新导入 JSON、开始新一轮主绘制/断点续画、或关键标定上下文变化时，会清空旧验证缓存，避免旧结果误用于新画面
+
+#### 3. 新增验证标记图（`heartopia_app/application/post_paint_verifier.py`）
+- 新增 `build_annotated_verification_image()`
+- 在截图上直接叠加 mismatch 标记：
+  - `missing_background_like`：红色
+  - `wrong_palette_color`：橙色
+  - `uncertain`：黄色
+- 标记以逻辑格采样中心为基础绘制小框和十字，优先保证人工可读性
+
+#### 4. 截图验证改为后台线程执行（`heartopia_app/ui/pages/paint_page.py`）
+- 新增 `VerificationThread(QThread)`
+- 点击 `截图验证` 后，不再在 UI 主线程直接执行窗口查找、截图、采样和标记图生成
+- 修复“点击截图验证后窗口未响应”的问题
+
+#### 5. 验证预览只显示画板区域（方案 A）
+- 验证采样仍然基于整张游戏窗口截图，不改变验证逻辑
+- 但验证完成后会根据当前 `CanvasCalibration` 四角坐标，取画板的最小外接矩形
+- 预览区只显示裁剪后的画板区域标记图，更方便人工检查漏点
+
+#### 6. 补画流程保持保守策略
+- “补画白点”只消费最近一次验证结果中的 `repair_candidates`
+- repair pass 继续强制：
+  - `very_slow`
+  - `brush-only`
+  - `no bucket`
+- 为了验证是否存在轻微坐标偏差，repair-only 路径新增 **九宫格补点**：每个 repair candidate 会按中心 + 八邻域共 9 个点点击一次
+- 主绘制逻辑保持不变，九宫格补点只作用于 repair pass
+- repair 完成后不自动再验证，只提示用户可按需再次截图验证
+- repair pass 停止时仍不会覆盖主绘制断点
+
+#### 7. Paint 页改为左右布局（`heartopia_app/ui/pages/paint_page.py`）
+- 参考 Convert 页，把 Paint 页从上下堆叠改成左右分栏
+- 左侧放：数据导入、绘画控制、进度、日志
+- 右侧放：验证预览摘要 + 验证图片
+- 总窗口宽度保持主窗口原配置不变，仅调整页面内部布局
+
+#### 8. 调色板归位时序修正（`heartopia_app/application/paint_session.py`）
+- `_reset_palette()` 中每次点击左翻页后的等待时间：`0.1s -> 0.4s`
+- 归位完成后的最终等待保持 `0.6s`
+- 目的是让游戏 UI 有足够时间真正翻页，避免从最后一页回到第一页时停在中间页
+
+### 验证
+- `paint_page.py` / `post_paint_verifier.py` / `paint_session.py` 均通过 IDE diagnostics
+- 针对上述文件执行 `python -m compileall` 通过
+
+---
+
+## 2026-03-11：画后截图验证 + 保守自动补画闭环（V1）
+
+### 背景
+正式绘制已经基本稳定，但仍会偶发少量“漏几个白点 / 未填满的小缺口”。继续只调点击偏移收益下降，因此新增“画后校验 + 保守补画”的闭环：主绘制完成后截图，按当前标定重建逻辑网格，与目标 JSON 对比；V1 只识别并修复“目标应有颜色、实际看起来像背景/漏白点”的像素，不自动纠正任意错色。
+
+### 改动
+
+#### 1. 新增纯逻辑验证模块（`heartopia_app/application/post_paint_verifier.py`）
+- 新增 `verify_painted_canvas()`：
+  - 对每个逻辑格调用 `CanvasCalibration.get_screen_pos()` 取样
+  - 使用小邻域采样（默认 3x3）而非整图 resize/quantize
+  - 对采样结果做中位数 / 多数投票，重建“观察到的逻辑网格”
+- 新增 `VerificationResult` / `VerificationMismatch` 数据结构
+- mismatch 分类分为：
+  - `missing_background_like`
+  - `wrong_palette_color`
+  - `uncertain`
+- 新增 `build_repair_pixel_data()`：仅根据保守 repair candidates 构造 repair-only 的 `PixelData`
+
+#### 2. 窗口截图接口补充（`heartopia_app/infrastructure/window_backend.py`）
+- 新增 `capture_window_with_rect()`，一次返回截图和窗口客户区矩形，避免页面层重复查 rect
+
+#### 3. PaintSession 增加显式 bucket 开关（`heartopia_app/application/paint_session.py`）
+- 新增 `use_bucket_fill` 字段和 `set_bucket_fill_enabled()`
+- 主循环中的 bucket 模式从“只看 toolbar 是否标定”改为“UI 开关 + toolbar 已标定”共同决定
+- 顺手修复了一个旧问题：此前 `PaintPage` 上的“油漆桶填充”复选框实际上没有真正控制 `PaintSession`
+
+#### 4. PaintPage 接管完整状态机（`heartopia_app/ui/pages/paint_page.py`）
+- 新增两个开关：
+  - `完成后截图验证`
+  - `发现漏白点后自动补画（实验）`
+- 新增 `_PaintRunContext`，区分主绘制 / repair pass
+- 主绘制完成后不再立刻弹完成，而是：
+  1. 可选截图验证
+  2. 输出 mismatch 摘要和前若干条明细日志
+  3. 若启用自动补画且存在 repair candidates，则启动 repair pass
+  4. repair pass 完成后可选再做一次最终验证
+  5. 最后再清 session / 弹完成提示
+- 增加“绘画成功但后处理失败”的告警路径：验证/补画失败时，不把整次绘画误报成失败
+
+#### 5. Repair pass 约束
+- repair pass 强制：
+  - `click-only`
+  - `brush-only`
+  - `very_slow`
+  - 只执行一轮
+- 停止 repair pass 时不会覆盖主绘制断点，避免把小补画进度误存成正式断点
+
+### 保守策略（V1）
+- 仅 `missing_background_like` 进入自动补画候选
+- `wrong_palette_color` 和 `uncertain` 只统计、只记日志，不自动纠正
+- 对目标本身是白色 / 极浅色的格子，默认排除自动补画，避免把“画对的白色”误判为漏白点
+
+### 验证
+- `python -m compileall heartopia_app` 通过
+- `python -m py_compile` 针对本次改动文件通过
+- IDE diagnostics 未报告本次修改文件的错误
+
+---
+
+## 2026-03-11：绘制策略回退 — 全面禁用拖动，改为纯点击 + 桶填充左偏补偿
+
+### 背景
+拖动绘制在边框测试中有效，但迁移到正式绘制后，bucket boundary 的 snake_sort 点序不是连续轮廓，拖动无法保证封闭，导致桶填外溢。经多轮迭代后决定全面回退为纯点击。
+
+### 改动（`heartopia_app/application/paint_session.py`）
+1. **全面禁用 drag** — 所有绘制路径不再调用 `drag_path`，恢复逐点 click
+2. **桶填充左偏双击** — bucket 模式下每次桶工具点击前先点 `(x-1, y)` 再点 `(x, y)`
+3. **ring 像素补画** — `shrink_interior_away_from_boundary` 缩掉的那圈像素用 brush 补画，修复进度只到 87% 就显示完成的 bug
+4. **小子区域改用 brush** — safe_interior 中 <4 像素的子区域改用 brush 逐点 click，修复桶工具对极小区域不生效的问题
+5. 新增 `_click_points()` 通用点击辅助方法，返回 `(stopped, painted_count)` 支持 resume offset
+
+### 遗留
+- `CalibrationService.test_border()` 仍使用拖动（drag_path），后续需改为纯 click 并彻底删除 drag 相关代码
+
+---
+
+## 2026-03-10：Phase 4 补丁 — 4 个 Bug / 功能改进
+
+### 问题 1: 标定按比例存储
+- `calibration_page.py`: 固定坐标 GroupBox 新增比例 `QComboBox`（16:9 / 4:3 / 1:1 / 3:4 / 9:16）
+- `_save_fixed_positions()`: `canvas` → `canvas_profiles[ratio]`，保留其他比例配置
+- `_apply_fixed_positions()`: 优先从 `canvas_profiles[ratio]` 查找，兼容旧 `canvas` 格式
+- `paint_page.py`: `_import_json()` 成功后自动尝试应用匹配比例的固定坐标
+
+### 问题 2: 油漆桶连通性 Bug
+- `paint_algorithms.py`: `find_connected_components()` 4-连通 → 8-连通（含对角线）
+- `classify_boundary_interior()` 4-邻域 → 8-邻域
+- `find_4connected_subregions()` 保持 4-连通不变（匹配游戏桶填充语义）
+
+### 问题 3: 测试标定简化 + 加速 + 热键中断
+- `calibration_service.py`: `test_border()` 改为只用黑色通刷，点击间隔 0.03s → 0.015s
+- `calibration_page.py`: 测试标定期间启动 pynput keyboard listener 监听 F7 中断
+
+### 问题 4: 断点续画手动指定起始点
+- `paint_session.py`: `PaintProgress` 新增 `from_pixel_offset(plan, pixel_offset)` classmethod
+- `paint_page.py`: 断点续画按钮旁新增 `QSpinBox`（范围 0 ~ total_pixels），支持手动输入起始像素
+
+---
+
+## 2026-03-10：统一应用架构重构（Phase 1-3, 5）
+
+### 重构目标
+将 converter + painter + shared 收敛为单一 PySide6 桌面应用 `heartopia_app/`，四层架构（Domain / Application / Infrastructure / UI）。
+
+### 已完成
+1. **新包骨架** — `heartopia_app/` 目录结构，`python -m heartopia_app` 启动
+2. **Domain 层迁移**
+   - `palette.py` ← 从 `shared/palette.py` 迁移
+   - `pixel_data.py` ← 从 `shared/pixel_data.py` 升级，新增 typed `Pixel` dataclass
+   - `conversion.py` ← 从 `converter/heartopia_converter.py` 迁移，GUI 无关
+   - `calibration.py` — 新建标定数据模型
+   - `paint_plan.py` — 新建绘画计划模型
+3. **Application 层** — `AppSettings` / `WorkspaceState` / `ConversionService`
+4. **Infrastructure 层** — `paths.py`（统一 app-data 目录）、三个 Repository
+5. **UI 层** — `MainWindow`（4 标签页）+ 4 个 Page
+6. **Bootstrap** — DPI awareness、QApplication 初始化（提权/隐藏控制台默认关闭）
+
+### 修复记录
+- **Python 3.9 兼容** — 移除所有 `@dataclass(slots=True)`
+- **提权闪退** — `ShellExecuteW` 参数修正为 `-m heartopia_app`；`request_admin_on_launch` / `auto_hide_console` 默认改为 `False`
+- **转换卡住** — `ConvertPage` 调用 `result.preview_image()` / `result.stats()` 方法名不匹配，改为 `get_preview_image()` / `get_stats()`；给 `ConversionResult` 添加 `grid_width` / `grid_height` 属性和 `get_preview_image()` 方法
+- **左侧面板挤压** — 控制面板加 `QScrollArea` 包裹，最小宽度 340px；窗口默认 1280×900
+
+### 功能状态
+| 功能 | 状态 |
+|------|------|
+| 图片转换（选图/参数/转换/预览/导出 JSON+CSV） | ✅ 完整 |
+| 设置管理（保存/持久化） | ✅ 完整 |
+| 标定页 UI + 核心逻辑 | ✅ 完整（含 F7 中断、比例存储、网格同步） |
+| 绘画页 UI + 核心逻辑 | ✅ 完整（含断点续画、油漆桶、手动起点） |
+| 旧入口退役 | ❌ 待完成 |
+
+---
+
+
 
 ### 桶填充连通性修正 (`painter/paint_engine.py`)
 - 按用户确认，将桶填充相关分析统一为 **4 连通**
