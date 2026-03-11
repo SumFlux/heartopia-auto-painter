@@ -92,6 +92,7 @@ class PaintSession:
         self.plan: Optional[PaintPlan] = None
         self.is_running = False
         self.is_paused = False
+        self.use_bucket_fill = True
         self._stop_event = threading.Event()
         self._pause_event = threading.Event()
         self._pause_event.set()  # not paused initially
@@ -116,6 +117,9 @@ class PaintSession:
     def set_speed(self, preset_name: str) -> None:
         if preset_name in SPEED_PRESETS:
             self.delay_ms = SPEED_PRESETS[preset_name]
+
+    def set_bucket_fill_enabled(self, enabled: bool) -> None:
+        self.use_bucket_fill = enabled
 
     def start(self, resume_progress: Optional[PaintProgress] = None) -> None:
         if self.is_running:
@@ -209,9 +213,9 @@ class PaintSession:
             return
         for _ in range(13):
             self.backend.click(self.palette.left_tab[0], self.palette.left_tab[1])
-            time.sleep(0.1)
+            time.sleep(0.4)
         self.palette.current_group_idx = 0
-        time.sleep(0.5)
+        time.sleep(0.6)
 
     def _switch_to_group(self, target_idx: int) -> None:
         """Switch palette to *target_idx* via relative page flipping."""
@@ -433,7 +437,7 @@ class PaintSession:
             delay_sec = self.delay_ms / 1000.0
 
             # Determine bucket mode availability
-            bucket_mode = self.toolbar.calibrated
+            bucket_mode = self.use_bucket_fill and self.toolbar.calibrated
 
             for color_idx, group in enumerate(self.plan.groups):
                 group_key = group.group_key

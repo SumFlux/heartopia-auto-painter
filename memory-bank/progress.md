@@ -1,3 +1,121 @@
+## 2026-03-11：截图验证改为手动按钮 + 画板区域预览 + 调色板归位时序修正
+
+### 背景
+原先的“画后截图验证 + 保守自动补画”第一版仍带有较强自动流程色彩，而且手动点击截图验证时会阻塞 UI；同时验证预览显示整张窗口，不利于人工只看画板区域。另一个实际使用问题是调色板从最后几页归位到第一页时，左翻页点击间隔太短，游戏来不及翻页，导致归位停在中间页。
+
+### 改动
+
+#### 1. PaintPage 改为纯手动验证/补画流程（`heartopia_app/ui/pages/paint_page.py`）
+- 移除主绘制完成后的自动验证、自动补画、补后自动终验主链路
+- 新增两个独立按钮：
+  - `截图验证`
+  - `补画白点`
+- 主绘制完成后恢复为普通完成提示；是否验证、是否补画完全由用户手动决定
+
+#### 2. 验证结果缓存 + UI 预览区
+- 在 Paint 页新增“验证预览”区域，复用 `QScrollArea + QLabel` 模式显示验证图
+- 缓存最近一次 `VerificationResult` 与预览图，仅当存在最近一次有效验证且包含 `missing_background_like` 候选时才允许点击“补画白点”
+- 当重新导入 JSON、开始新一轮主绘制/断点续画、或关键标定上下文变化时，会清空旧验证缓存，避免旧结果误用于新画面
+
+#### 3. 新增验证标记图（`heartopia_app/application/post_paint_verifier.py`）
+- 新增 `build_annotated_verification_image()`
+- 在截图上直接叠加 mismatch 标记：
+  - `missing_background_like`：红色
+  - `wrong_palette_color`：橙色
+  - `uncertain`：黄色
+- 标记以逻辑格采样中心为基础绘制小框和十字，优先保证人工可读性
+
+#### 4. 截图验证改为后台线程执行（`heartopia_app/ui/pages/paint_page.py`）
+- 新增 `VerificationThread(QThread)`
+- 点击 `截图验证` 后，不再在 UI 主线程直接执行窗口查找、截图、采样和标记图生成
+- 修复“点击截图验证后窗口未响应”的问题
+
+#### 5. 验证预览只显示画板区域（方案 A）
+- 验证采样仍然基于整张游戏窗口截图，不改变验证逻辑
+- 但验证完成后会根据当前 `CanvasCalibration` 四角坐标，取画板的最小外接矩形
+- 预览区只显示裁剪后的画板区域标记图，更方便人工检查漏点
+
+#### 6. 补画流程保持保守策略
+- “补画白点”只消费最近一次验证结果中的 `repair_candidates`
+- repair pass 继续强制：
+  - `very_slow`
+  - `brush-only`
+  - `click-only`
+  - `no bucket`
+- repair 完成后不自动再验证，只提示用户可按需再次截图验证
+- repair pass 停止时仍不会覆盖主绘制断点
+
+#### 7. 调色板归位时序修正（`heartopia_app/application/paint_session.py`）
+- `_reset_palette()` 中每次点击左翻页后的等待时间：`0.1s -> 0.4s`
+- 归位完成后的最终等待保持 `0.6s`
+- 目的是让游戏 UI 有足够时间真正翻页，避免从最后一页回到第一页时停在中间页
+
+### 验证
+- `paint_page.py` / `post_paint_verifier.py` / `paint_session.py` 均通过 IDE diagnostics
+- 针对上述文件执行 `python -m compileall` 通过
+
+---
+
+## 2026-03-11：画后截图验证 + 保守自动补画闭环（V1）
+
+### 背景
+正式绘制已经基本稳定，但仍会偶发少量“漏几个白点 / 未填满的小缺口”。继续只调点击偏移收益下降，因此新增“画后校验 + 保守补画”的闭环：主绘制完成后截图，按当前标定重建逻辑网格，与目标 JSON 对比；V1 只识别并修复“目标应有颜色、实际看起来像背景/漏白点”的像素，不自动纠正任意错色。
+
+### 改动
+
+#### 1. 新增纯逻辑验证模块（`heartopia_app/application/post_paint_verifier.py`）
+- 新增 `verify_painted_canvas()`：
+  - 对每个逻辑格调用 `CanvasCalibration.get_screen_pos()` 取样
+  - 使用小邻域采样（默认 3x3）而非整图 resize/quantize
+  - 对采样结果做中位数 / 多数投票，重建“观察到的逻辑网格”
+- 新增 `VerificationResult` / `VerificationMismatch` 数据结构
+- mismatch 分类分为：
+  - `missing_background_like`
+  - `wrong_palette_color`
+  - `uncertain`
+- 新增 `build_repair_pixel_data()`：仅根据保守 repair candidates 构造 repair-only 的 `PixelData`
+
+#### 2. 窗口截图接口补充（`heartopia_app/infrastructure/window_backend.py`）
+- 新增 `capture_window_with_rect()`，一次返回截图和窗口客户区矩形，避免页面层重复查 rect
+
+#### 3. PaintSession 增加显式 bucket 开关（`heartopia_app/application/paint_session.py`）
+- 新增 `use_bucket_fill` 字段和 `set_bucket_fill_enabled()`
+- 主循环中的 bucket 模式从“只看 toolbar 是否标定”改为“UI 开关 + toolbar 已标定”共同决定
+- 顺手修复了一个旧问题：此前 `PaintPage` 上的“油漆桶填充”复选框实际上没有真正控制 `PaintSession`
+
+#### 4. PaintPage 接管完整状态机（`heartopia_app/ui/pages/paint_page.py`）
+- 新增两个开关：
+  - `完成后截图验证`
+  - `发现漏白点后自动补画（实验）`
+- 新增 `_PaintRunContext`，区分主绘制 / repair pass
+- 主绘制完成后不再立刻弹完成，而是：
+  1. 可选截图验证
+  2. 输出 mismatch 摘要和前若干条明细日志
+  3. 若启用自动补画且存在 repair candidates，则启动 repair pass
+  4. repair pass 完成后可选再做一次最终验证
+  5. 最后再清 session / 弹完成提示
+- 增加“绘画成功但后处理失败”的告警路径：验证/补画失败时，不把整次绘画误报成失败
+
+#### 5. Repair pass 约束
+- repair pass 强制：
+  - `click-only`
+  - `brush-only`
+  - `very_slow`
+  - 只执行一轮
+- 停止 repair pass 时不会覆盖主绘制断点，避免把小补画进度误存成正式断点
+
+### 保守策略（V1）
+- 仅 `missing_background_like` 进入自动补画候选
+- `wrong_palette_color` 和 `uncertain` 只统计、只记日志，不自动纠正
+- 对目标本身是白色 / 极浅色的格子，默认排除自动补画，避免把“画对的白色”误判为漏白点
+
+### 验证
+- `python -m compileall heartopia_app` 通过
+- `python -m py_compile` 针对本次改动文件通过
+- IDE diagnostics 未报告本次修改文件的错误
+
+---
+
 ## 2026-03-11：绘制策略回退 — 全面禁用拖动，改为纯点击 + 桶填充左偏补偿
 
 ### 背景

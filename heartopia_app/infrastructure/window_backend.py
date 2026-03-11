@@ -56,6 +56,14 @@ def capture_window(hwnd: int) -> Optional['PIL.Image.Image']:
     return ImageGrab.grab(bbox=rect)
 
 
+def capture_window_with_rect(hwnd: int) -> Optional[tuple['PIL.Image.Image', Tuple[int, int, int, int]]]:
+    """截取游戏窗口并返回截图及客户区矩形。"""
+    rect = get_window_rect(hwnd)
+    if rect is None:
+        return None
+    return ImageGrab.grab(bbox=rect), rect
+
+
 def get_window_size(hwnd: int) -> Optional[Tuple[int, int]]:
     """获取窗口客户区尺寸"""
     rect = get_window_rect(hwnd)

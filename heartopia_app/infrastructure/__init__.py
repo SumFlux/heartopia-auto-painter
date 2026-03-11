@@ -5,4 +5,4 @@ from .settings_repository import SettingsRepository
 from .calibration_repository import CalibrationRepository
 from .session_repository import SessionRepository
 from .input_backend import InputBackend, PynputBackend, PostMessageBackend, create_backend
-from .window_backend import find_game_window, bring_to_front, get_window_rect, capture_window, get_window_size
+from .window_backend import find_game_window, bring_to_front, get_window_rect, capture_window, capture_window_with_rect, get_window_size
