@@ -137,7 +137,22 @@ class PaintPage(QWidget):
         self._setup_hotkeys()
 
     def _setup_ui(self) -> None:
-        main_layout = QVBoxLayout(self)
+        main_layout = QHBoxLayout(self)
+
+        left_panel = self._create_control_panel()
+        left_scroll = QScrollArea()
+        left_scroll.setWidget(left_panel)
+        left_scroll.setWidgetResizable(True)
+        left_scroll.setMinimumWidth(340)
+        left_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        main_layout.addWidget(left_scroll, stretch=1)
+
+        right_panel = self._create_preview_panel()
+        main_layout.addWidget(right_panel, stretch=2)
+
+    def _create_control_panel(self) -> QWidget:
+        panel = QWidget()
+        layout = QVBoxLayout(panel)
 
         data_group = QGroupBox("1. 像素数据导入")
         data_layout = QGridLayout(data_group)
@@ -148,7 +163,7 @@ class PaintPage(QWidget):
 
         self.data_label = QLabel("未加载数据")
         data_layout.addWidget(self.data_label, 0, 1)
-        main_layout.addWidget(data_group)
+        layout.addWidget(data_group)
 
         ctrl_group = QGroupBox("2. 画画控制")
         ctrl_layout = QGridLayout(ctrl_group)
@@ -210,7 +225,7 @@ class PaintPage(QWidget):
         resume_offset_row.addStretch()
         ctrl_layout.addLayout(resume_offset_row, 5, 0, 1, 2)
 
-        main_layout.addWidget(ctrl_group)
+        layout.addWidget(ctrl_group)
 
         prog_group = QGroupBox("3. 进度")
         prog_layout = QVBoxLayout(prog_group)
@@ -236,14 +251,29 @@ class PaintPage(QWidget):
         color_row.addStretch()
 
         prog_layout.addLayout(color_row)
-        main_layout.addWidget(prog_group)
+        layout.addWidget(prog_group)
 
-        preview_group = QGroupBox("4. 验证预览")
-        preview_layout = QVBoxLayout(preview_group)
+        self.log_text = QTextEdit()
+        self.log_text.setReadOnly(True)
+        self.log_text.setMaximumHeight(220)
+        layout.addWidget(self.log_text)
+
+        layout.addStretch()
+        return panel
+
+    def _create_preview_panel(self) -> QWidget:
+        panel = QWidget()
+        layout = QVBoxLayout(panel)
+
+        title = QLabel("验证预览")
+        title.setStyleSheet("font-size: 18px; font-weight: bold;")
+        title.setAlignment(Qt.AlignCenter)
+        layout.addWidget(title)
 
         self.verification_summary_label = QLabel("尚未执行截图验证")
         self.verification_summary_label.setWordWrap(True)
-        preview_layout.addWidget(self.verification_summary_label)
+        self.verification_summary_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self.verification_summary_label)
 
         self.verification_scroll = QScrollArea()
         self.verification_scroll.setWidgetResizable(True)
@@ -252,16 +282,12 @@ class PaintPage(QWidget):
         self.verification_image_label = QLabel("等待截图验证...")
         self.verification_image_label.setAlignment(Qt.AlignCenter)
         self.verification_image_label.setStyleSheet("background-color: #f0f0f0; border: 2px dashed #cccccc;")
-        self.verification_image_label.setMinimumSize(400, 260)
+        self.verification_image_label.setMinimumSize(400, 400)
 
         self.verification_scroll.setWidget(self.verification_image_label)
-        preview_layout.addWidget(self.verification_scroll)
-        main_layout.addWidget(preview_group)
+        layout.addWidget(self.verification_scroll)
 
-        self.log_text = QTextEdit()
-        self.log_text.setReadOnly(True)
-        self.log_text.setMaximumHeight(160)
-        main_layout.addWidget(self.log_text)
+        return panel
 
     def _current_verification_context_key(self) -> tuple:
         pixel_data = self.state.pixel_data
@@ -545,7 +571,7 @@ class PaintPage(QWidget):
         except Exception as e:
             self._log(f"  [!] 自动应用固定坐标失败: {e}")
 
-    def _create_session(self, pixel_data=None, *, speed_name: str | None = None, use_bucket_fill: bool | None = None):
+    def _create_session(self, pixel_data=None, *, speed_name: str | None = None, use_bucket_fill: bool | None = None, use_repair_nine_tap: bool = False):
         from heartopia_app.application.paint_session import PaintSession
         from heartopia_app.domain.paint_plan import build_paint_plan
 
@@ -571,6 +597,7 @@ class PaintPage(QWidget):
         session.set_bucket_fill_enabled(
             self.bucket_fill_cb.isChecked() if use_bucket_fill is None else use_bucket_fill
         )
+        session.set_repair_nine_tap_enabled(use_repair_nine_tap)
 
         session.on_progress = self._signals.progress.emit
         session.on_color_change = self._signals.color_change.emit
@@ -716,10 +743,11 @@ class PaintPage(QWidget):
             repair_pixel_data,
             speed_name="very_slow",
             use_bucket_fill=False,
+            use_repair_nine_tap=True,
         )
         self.progress_bar.setMaximum(plan.total_pixels)
         self.progress_bar.setValue(0)
-        self._log(f"[补画开始] 共 {plan.total_pixels} 像素，使用 very_slow + brush-only + click-only + no bucket")
+        self._log(f"[补画开始] 共 {plan.total_pixels} 像素，使用 very_slow + brush-only + no bucket + 九宫格补点")
         self._session.start()
         self._update_ui_state()
 

@@ -93,6 +93,7 @@ class PaintSession:
         self.is_running = False
         self.is_paused = False
         self.use_bucket_fill = True
+        self.use_repair_nine_tap = False
         self._stop_event = threading.Event()
         self._pause_event = threading.Event()
         self._pause_event.set()  # not paused initially
@@ -120,6 +121,9 @@ class PaintSession:
 
     def set_bucket_fill_enabled(self, enabled: bool) -> None:
         self.use_bucket_fill = enabled
+
+    def set_repair_nine_tap_enabled(self, enabled: bool) -> None:
+        self.use_repair_nine_tap = enabled
 
     def start(self, resume_progress: Optional[PaintProgress] = None) -> None:
         if self.is_running:
@@ -242,6 +246,26 @@ class PaintSession:
             self.backend.click(self.toolbar.bucket[0], self.toolbar.bucket[1], press_duration=0.02)
             time.sleep(0.15)
 
+    def _click_repair_nine_tap(self, screen_x: int, screen_y: int, delay_sec: float) -> bool:
+        offsets = [
+            (0, 0),
+            (-1, 0),
+            (1, 0),
+            (0, -1),
+            (0, 1),
+            (-1, -1),
+            (1, -1),
+            (-1, 1),
+            (1, 1),
+        ]
+        for dx, dy in offsets:
+            self._wait_if_paused()
+            if self._stop_event.is_set():
+                return True
+            self.backend.click(screen_x + dx, screen_y + dy, press_duration=0.015)
+            self._jittered_delay(delay_sec)
+        return False
+
     def _click_points(
         self,
         points: List[Tuple[int, int]],
@@ -254,14 +278,18 @@ class PaintSession:
                 return True, painted_count
 
             screen_x, screen_y = self.canvas.get_screen_pos(px, py)
-            self.backend.click(screen_x, screen_y, press_duration=0.015)
+            if self.use_repair_nine_tap:
+                stopped = self._click_repair_nine_tap(screen_x, screen_y, delay_sec)
+                if stopped:
+                    return True, painted_count
+            else:
+                self.backend.click(screen_x, screen_y, press_duration=0.015)
+                self._jittered_delay(delay_sec)
             painted_count += 1
 
             self._progress.drawn_pixels += 1
             if self.on_progress:
                 self.on_progress(self._progress.drawn_pixels, self.plan.total_pixels)
-
-            self._jittered_delay(delay_sec)
 
         return False, painted_count
 

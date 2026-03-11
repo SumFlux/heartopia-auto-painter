@@ -40,12 +40,19 @@
 - repair pass 继续强制：
   - `very_slow`
   - `brush-only`
-  - `click-only`
   - `no bucket`
+- 为了验证是否存在轻微坐标偏差，repair-only 路径新增 **九宫格补点**：每个 repair candidate 会按中心 + 八邻域共 9 个点点击一次
+- 主绘制逻辑保持不变，九宫格补点只作用于 repair pass
 - repair 完成后不自动再验证，只提示用户可按需再次截图验证
 - repair pass 停止时仍不会覆盖主绘制断点
 
-#### 7. 调色板归位时序修正（`heartopia_app/application/paint_session.py`）
+#### 7. Paint 页改为左右布局（`heartopia_app/ui/pages/paint_page.py`）
+- 参考 Convert 页，把 Paint 页从上下堆叠改成左右分栏
+- 左侧放：数据导入、绘画控制、进度、日志
+- 右侧放：验证预览摘要 + 验证图片
+- 总窗口宽度保持主窗口原配置不变，仅调整页面内部布局
+
+#### 8. 调色板归位时序修正（`heartopia_app/application/paint_session.py`）
 - `_reset_palette()` 中每次点击左翻页后的等待时间：`0.1s -> 0.4s`
 - 归位完成后的最终等待保持 `0.6s`
 - 目的是让游戏 UI 有足够时间真正翻页，避免从最后一页回到第一页时停在中间页
