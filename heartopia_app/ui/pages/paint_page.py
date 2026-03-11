@@ -122,7 +122,10 @@ class PaintPage(QWidget):
         self._last_verification_pixmap: QPixmap | None = None
         self._last_verification_summary = "尚未执行截图验证"
         self._verification_context_key = self._current_verification_context_key()
+        self._last_verification_result_context_key: tuple | None = None
         self._verification_thread: VerificationThread | None = None
+        self._fixed_positions_auto_applied = False
+        self._fixed_positions_context_key: tuple | None = None
 
         self._signals = _Signals()
         self._signals.log.connect(self._log)
@@ -210,7 +213,7 @@ class PaintPage(QWidget):
         self.verify_btn.clicked.connect(self._run_manual_verification)
         ctrl_layout.addWidget(self.verify_btn, 4, 0)
 
-        self.repair_btn = QPushButton("补画白点")
+        self.repair_btn = QPushButton("补画")
         self.repair_btn.setEnabled(False)
         self.repair_btn.clicked.connect(self._start_manual_repair)
         ctrl_layout.addWidget(self.repair_btn, 4, 1)
@@ -326,9 +329,57 @@ class PaintPage(QWidget):
         self._last_verification_result = None
         self._last_verification_pixmap = None
         self._last_verification_summary = "尚未执行截图验证"
+        self._last_verification_result_context_key = None
         self._update_verification_preview()
         if reason and had_cache:
             self._log(f"[验证缓存] 已清空：{reason}")
+
+    def refresh_for_current_context(self) -> None:
+        self._update_ui_state()
+
+    def _backend_label(self) -> str:
+        backend = self.state.input_backend
+        return backend.__class__.__name__ if backend is not None else "None"
+
+    def _canvas_diagnostics_text(self) -> str:
+        canvas = self.state.canvas_calibration
+        if not canvas.calibrated:
+            return "canvas=未标定"
+        return (
+            f"canvas tl={canvas.top_left} tr={canvas.top_right} "
+            f"bl={canvas.bottom_left} br={canvas.bottom_right} "
+            f"offset=({canvas.offset_x},{canvas.offset_y}) "
+            f"phase=({canvas.subpixel_phase_x},{canvas.subpixel_phase_y})"
+        )
+
+    @staticmethod
+    def _format_coord_samples(coords: list[tuple[int, int]], limit: int = 8) -> str:
+        if not coords:
+            return "[]"
+        sample = ", ".join(f"({x},{y})" for x, y in coords[:limit])
+        if len(coords) > limit:
+            sample += ", ..."
+        return f"[{sample}]"
+
+    def _log_verification_context(self, action: str, *, repair_candidates=None) -> None:
+        self._log(f"[{action}] backend={self._backend_label()}")
+        self._log(f"[{action}] {self._canvas_diagnostics_text()}")
+        auto_applied_current = (
+            self._fixed_positions_auto_applied
+            and self._fixed_positions_context_key == self._current_verification_context_key()
+        )
+        self._log(
+            f"[{action}] fixed_positions_auto_applied={'yes' if auto_applied_current else 'no'}"
+        )
+        if auto_applied_current:
+            self._log(
+                f"[{action}] [提示] 当前坐标来自自动应用的 fixed positions，建议先做一次新的截图验证再补画"
+            )
+        if repair_candidates is not None:
+            coords = [candidate.coord for candidate in repair_candidates]
+            self._log(
+                f"[{action}] repair_candidates={len(coords)} samples={self._format_coord_samples(coords)}"
+            )
 
     def _update_verification_preview(self) -> None:
         self.verification_summary_label.setText(self._last_verification_summary)
@@ -378,6 +429,11 @@ class PaintPage(QWidget):
         if current_context_key != self._verification_context_key:
             self._verification_context_key = current_context_key
             self._clear_verification_cache(reason="像素数据或标定已变化")
+        elif (
+            self._last_verification_result is not None
+            and self._last_verification_result_context_key != current_context_key
+        ):
+            self._clear_verification_cache(reason="当前验证结果已不再匹配页面上下文")
 
         has_data = self.state.pixel_data is not None
         has_canvas = self.state.canvas_calibration.calibrated
@@ -491,6 +547,8 @@ class PaintPage(QWidget):
             self.state.pixel_data = PixelData.from_json_file(file_path)
             self.state.pixel_data_path = Path(file_path)
             self._verification_context_key = self._current_verification_context_key()
+            self._fixed_positions_auto_applied = False
+            self._fixed_positions_context_key = None
             self._clear_verification_cache(reason="重新导入了 JSON")
 
             ratio_str = self.state.pixel_data.ratio or "unknown"
@@ -567,7 +625,10 @@ class PaintPage(QWidget):
                 self.state.toolbar_calibration,
             )
             self._verification_context_key = self._current_verification_context_key()
+            self._fixed_positions_auto_applied = True
+            self._fixed_positions_context_key = self._verification_context_key
             self._clear_verification_cache(reason="自动应用了固定标定")
+            self._log("  [自动应用] 当前 fixed positions 仅作快速恢复，建议先重新执行一次截图验证，再进行补画")
         except Exception as e:
             self._log(f"  [!] 自动应用固定坐标失败: {e}")
 
@@ -640,6 +701,8 @@ class PaintPage(QWidget):
             progress = self._session.stop()
             if self._run_context.mode == "main" and progress.drawn_pixels > 0:
                 self.session_repository.save(progress.to_dict())
+            elif self._run_context.mode == "repair":
+                self._clear_verification_cache(reason="补画中断，旧验证结果已失效")
 
     def _stop_painting(self) -> None:
         if self._session and self._session.is_running:
@@ -648,12 +711,14 @@ class PaintPage(QWidget):
                 self.session_repository.save(progress.to_dict())
                 self._log(f"[停止] 进度已保存 ({progress.drawn_pixels} 像素)")
             elif self._run_context.mode == "repair":
+                self._clear_verification_cache(reason="补画中断，旧验证结果已失效")
                 self._log("[停止] 已停止补画轮次（未覆盖主绘制断点）")
             else:
                 self._log("[停止] 绘画已停止")
             self._session = None
             self.pause_btn.setText("⏸ 暂停 (F6)")
             self._update_ui_state()
+            self._run_context = _PaintRunContext()
 
     def _resume_painting(self) -> None:
         try:
@@ -685,7 +750,9 @@ class PaintPage(QWidget):
             QMessageBox.warning(self, "截图验证失败", "尚未加载像素数据")
             return
 
+        self._clear_verification_cache(reason="开始新的截图验证")
         self._log("[验证] 正在截图并生成标记图...")
+        self._log_verification_context("验证开始")
         self._last_verification_summary = "正在执行截图验证..."
         self._update_verification_preview()
 
@@ -702,6 +769,10 @@ class PaintPage(QWidget):
 
     def _on_verification_finished(self, result, annotated_image, window_rect) -> None:
         self._last_verification_result = result
+        self._last_verification_result_context_key = self._current_verification_context_key()
+        self._verification_context_key = self._last_verification_result_context_key
+        self._fixed_positions_auto_applied = False
+        self._fixed_positions_context_key = None
         preview_image = self._crop_image_to_canvas_bounds(annotated_image, window_rect)
         self._last_verification_pixmap = self._pil_image_to_pixmap(preview_image)
         self._last_verification_summary = result.summary_text()
@@ -718,9 +789,12 @@ class PaintPage(QWidget):
             self._log(f"  ... 其余 {len(result.mismatches) - 10} 个 mismatch 省略")
 
         if result.repair_candidates:
-            self._log(f"[补画候选] 共 {len(result.repair_candidates)} 个漏白点候选，可手动点击“补画白点”")
+            self._log(f"[补画候选] 共 {len(result.repair_candidates)} 个可补画候选，可手动点击“补画”")
+            self._log(
+                f"[补画候选] 样本坐标 {self._format_coord_samples([candidate.coord for candidate in result.repair_candidates])}"
+            )
         else:
-            self._log("[补画候选] 当前没有可补画的漏白点候选")
+            self._log("[补画候选] 当前没有可补画候选")
 
         self._verification_thread = None
         self._update_ui_state()
@@ -734,20 +808,27 @@ class PaintPage(QWidget):
         QMessageBox.warning(self, "截图验证失败", f"截图验证失败：\n{error_msg}")
 
     def _start_repair_pass(self, repair_pixel_data) -> None:
+        repair_speed_name = SPEED_MAP.get(self.speed_combo.currentIndex(), 'normal')
+        if repair_speed_name == 'fast':
+            repair_speed_name = 'normal'
+
+        repair_candidates = self._last_verification_result.repair_candidates if self._last_verification_result else []
+        self._clear_verification_cache(reason="补画即将改动画布")
         self._run_context = _PaintRunContext(
             mode="repair",
             clear_session_on_success=False,
-            final_message="补画白点已完成！",
+            final_message="补画已完成！",
         )
         self._session, plan = self._create_session(
             repair_pixel_data,
-            speed_name="very_slow",
+            speed_name=repair_speed_name,
             use_bucket_fill=False,
             use_repair_nine_tap=True,
         )
         self.progress_bar.setMaximum(plan.total_pixels)
         self.progress_bar.setValue(0)
-        self._log(f"[补画开始] 共 {plan.total_pixels} 像素，使用 very_slow + brush-only + no bucket + 九宫格补点")
+        self._log(f"[补画开始] 共 {plan.total_pixels} 像素，使用 {repair_speed_name} + brush-only + no bucket + 十字补点")
+        self._log_verification_context("补画开始", repair_candidates=repair_candidates)
         self._session.start()
         self._update_ui_state()
 
@@ -759,9 +840,16 @@ class PaintPage(QWidget):
             if result is None:
                 raise RuntimeError("请先执行截图验证")
             if not result.repair_candidates:
-                raise RuntimeError("最近一次验证结果中没有可补画的漏白点候选")
+                raise RuntimeError("最近一次验证结果中没有可补画的候选点")
             if self.state.pixel_data is None:
                 raise RuntimeError("尚未加载像素数据")
+            current_context_key = self._current_verification_context_key()
+            if current_context_key != self._verification_context_key:
+                raise RuntimeError("当前标定或数据已变化，请重新执行截图验证后再补画")
+            if self._last_verification_result_context_key != current_context_key:
+                raise RuntimeError("最近一次验证结果已失效，请重新执行截图验证后再补画")
+            if self._fixed_positions_auto_applied and self._fixed_positions_context_key == current_context_key:
+                raise RuntimeError("本轮坐标来自自动应用的 fixed positions，请先重新执行一次截图验证，再进行补画")
 
             repair_pixel_data = build_repair_pixel_data(self.state.pixel_data, result.repair_candidates)
             self._start_repair_pass(repair_pixel_data)
@@ -776,6 +864,7 @@ class PaintPage(QWidget):
         self.pause_btn.setText("⏸ 暂停 (F6)")
         self._update_ui_state()
         QMessageBox.information(self, "完成", message)
+        self._run_context = _PaintRunContext()
 
     def _on_progress(self, drawn: int, total: int) -> None:
         self.progress_bar.setValue(drawn)
@@ -797,14 +886,18 @@ class PaintPage(QWidget):
         self._update_ui_state()
 
         if mode == "repair":
-            self._finalize_success("补画白点已完成，请按需再次点击截图验证复查。", clear_session=False)
+            self._clear_verification_cache(reason="补画已完成，等待新的截图验证")
+            self._finalize_success("补画已完成，请按需再次点击截图验证复查。", clear_session=False)
             return
 
         self._finalize_success(self._run_context.final_message, clear_session=self._run_context.clear_session_on_success)
 
     def _on_error(self, msg: str) -> None:
         self._log(f"[ERROR] {msg}")
+        if self._run_context.mode == "repair":
+            self._clear_verification_cache(reason="补画异常结束，旧验证结果已失效")
         self._session = None
         self.pause_btn.setText("⏸ 暂停 (F6)")
         self._update_ui_state()
+        self._run_context = _PaintRunContext()
         QMessageBox.critical(self, "绘画错误", msg)

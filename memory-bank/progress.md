@@ -1,3 +1,58 @@
+## 2026-03-11：补画后验证上下文失效修复 + 十字补画 + 错色纳入 repair
+
+### 背景
+当前手动“截图验证 → 补画”流程中，用户确认补画点击本身基本有效，真正问题是补画后的第二次截图验证仍沿用旧的页面级验证上下文/缓存状态，表现为像是补画没有应用到新的验证坐标，且重启应用后恢复正常。因此本轮重点不是扩大补画范围，而是最小改动修复验证失效机制，并顺手降低 repair 耗时。
+
+### 改动
+
+#### 1. 收紧验证结果有效性（`heartopia_app/ui/pages/paint_page.py`, `heartopia_app/ui/main_window.py`）
+- 保留现有 `VerificationThread + _last_verification_result + _verification_context_key` 主结构不变
+- 新增单独字段记录“最近一次验证结果生成时的 context key”，不再混用“当前页面 context”和“结果有效性”
+- 在以下时机主动清空验证缓存：
+  - 开始新的截图验证前
+  - 补画开始前
+  - 补画完成后
+  - 补画中断后
+  - 补画异常结束后
+- `MainWindow` 监听 tab 切换，回到“绘画”页时调用 `PaintPage.refresh_for_current_context()`，触发 UI 重新检查当前 context 并失效旧结果
+- 结果：标定页修改 offset / phase / calibration 后，旧截图验证结果不会继续被当作当前结果使用
+
+#### 2. repair-only 点击从九宫格改为十字补点（`heartopia_app/application/paint_session.py`）
+- 复用原有 repair-only 点击路径，不新增 executor
+- `_click_repair_nine_tap()` 的实际点击集合改为 5 点：中心 + 上下左右
+- 去掉 4 个对角补点
+- Paint 页日志文案同步从“九宫格补点”改为“十字补点”
+
+#### 3. repair 速度不再强制 `very_slow`（`heartopia_app/ui/pages/paint_page.py`）
+- repair 继续保持：
+  - `use_bucket_fill=False`
+  - brush-only
+- 速度改为复用当前 UI 速度选择
+- 若用户选择 `fast`，repair 保守钳制到 `normal`
+- 结果：repair 明显快于旧的 `very_slow + 九宫格`
+
+#### 4. 将 `wrong_palette_color` 纳入 repair 候选（`heartopia_app/application/post_paint_verifier.py`, `heartopia_app/ui/pages/paint_page.py`）
+- `VerificationResult.repair_candidates` 从只包含 `missing_background_like` 扩展为同时包含：
+  - `missing_background_like`
+  - `wrong_palette_color`
+- `uncertain` 仍明确排除
+- `build_repair_pixel_data()` 继续复用现有 mismatch → sparse PixelData 的逻辑，不额外新增修复流水线
+- UI / 日志文案从“补画白点 / 漏白点候选”放宽为更通用的“补画 / 可补画候选”
+
+### 验证
+- 对以下文件执行 `python -m compileall` 通过：
+  - `heartopia_app/ui/pages/paint_page.py`
+  - `heartopia_app/application/paint_session.py`
+  - `heartopia_app/application/post_paint_verifier.py`
+  - `heartopia_app/ui/main_window.py`
+- 预期行为：
+  - 补画后无需重启即可再次截图验证
+  - 标定改动后回到绘画页会自动使旧验证结果失效
+  - repair 点击从 9 次降为 5 次
+  - 错色点可进入 repair，`uncertain` 仍不自动修复
+
+---
+
 ## 2026-03-11：截图验证改为手动按钮 + 画板区域预览 + 调色板归位时序修正
 
 ### 背景

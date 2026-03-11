@@ -249,14 +249,10 @@ class PaintSession:
     def _click_repair_nine_tap(self, screen_x: int, screen_y: int, delay_sec: float) -> bool:
         offsets = [
             (0, 0),
-            (-1, 0),
-            (1, 0),
-            (0, -1),
-            (0, 1),
-            (-1, -1),
-            (1, -1),
-            (-1, 1),
-            (1, 1),
+            (-2, 0),
+            (2, 0),
+            (0, -2),
+            (0, 2),
         ]
         for dx, dy in offsets:
             self._wait_if_paused()

@@ -85,14 +85,15 @@ class VerificationResult:
         return [
             mismatch
             for mismatch in self.mismatches
-            if mismatch.classification == "missing_background_like"
+            if mismatch.classification in {"missing_background_like", "wrong_palette_color"}
         ]
 
     def summary_text(self) -> str:
+        repairable_count = self.missing_background_like_count + self.wrong_palette_color_count
         return (
             f"总目标像素 {self.total_target_pixels}，匹配 {self.matched_count}，"
-            f"mismatch {self.mismatch_count}，漏白点候选 {self.missing_background_like_count}，"
-            f"疑似错色 {self.wrong_palette_color_count}，不确定 {self.uncertain_count}"
+            f"mismatch {self.mismatch_count}，可补画 {repairable_count}，"
+            f"漏白点 {self.missing_background_like_count}，错色 {self.wrong_palette_color_count}，不确定 {self.uncertain_count}"
         )
 
 

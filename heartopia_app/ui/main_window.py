@@ -68,3 +68,9 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.calibration_page, "标定")
         self.tabs.addTab(self.paint_page, "绘画")
         self.tabs.addTab(self.settings_page, "设置")
+        self.tabs.currentChanged.connect(self._on_tab_changed)
+
+    def _on_tab_changed(self, index: int) -> None:
+        widget = self.tabs.widget(index)
+        if widget is self.paint_page:
+            self.paint_page.refresh_for_current_context()

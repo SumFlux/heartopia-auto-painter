@@ -69,10 +69,10 @@ shared/                   ← 共享数据层（palette.py + pixel_data.py）
 - **repositories** — 设置 / 标定 / 会话的 JSON 持久化
 
 ### UI 层
-- **main_window.py** — 4 标签页主窗口（转换 / 标定 / 绘画 / 设置）
+- **main_window.py** — 4 标签页主窗口（转换 / 标定 / 绘画 / 设置），并在切回“绘画”页时主动触发 `PaintPage` 刷新当前上下文
 - **convert_page.py** — 完整转换功能（选图、参数、转换、预览、导出）
-- **calibration_page.py** — 标定 UI 框架（功能待接入旧逻辑）
-- **paint_page.py** — 绘画控制 UI 框架（功能待接入旧逻辑）
+- **calibration_page.py** — 标定页，支持画布/调色板/工具栏标定、offset 微调、subpixel phase 切换、固定坐标保存/应用、测试标定
+- **paint_page.py** — 绘画控制页，已包含主绘制、断点续画、手动截图验证、验证预览、手动 repair、验证缓存失效控制
 - **settings_page.py** — 设置管理
 
 ---
@@ -93,6 +93,17 @@ shared/                   ← 共享数据层（palette.py + pixel_data.py）
   - `shrink_interior_away_from_boundary` 缩掉的 ring 像素也用 brush 补画（否则进度计数会缺失）
   - safe_interior 大子区域（≥4 像素）用桶工具填充，每次点击前先点 (x-1, y) 再点 (x, y)（左偏 1px 双击补偿）
   - safe_interior 小子区域（<4 像素）改用 brush 逐点 click（桶工具对极小区域不可靠）
+- 当前截图验证/repair 架构：
+  - `PaintPage` 持有最近一次 `VerificationResult`、验证预览图、当前页面 `context key`
+  - 额外单独记录“最近一次验证结果生成时的 context key”，用于判断结果是否仍有效
+  - 当重新验证、补画开始/完成/中断/异常结束、或标定/像素数据上下文变化时，会主动清空旧验证缓存
+  - `MainWindow` 在切回“绘画”页时触发 `PaintPage.refresh_for_current_context()`，确保标定页改动能让绘画页上的旧验证结果失效
+- 当前 repair 策略：
+  - 仍为 `brush-only + no bucket`
+  - repair 点击模式已从九宫格降为**十字补点**（中心 + 上下左右）
+  - repair 候选已从仅 `missing_background_like` 扩展为 `missing_background_like + wrong_palette_color`
+  - `uncertain` 仍不自动修复
+  - repair 速度复用 UI 速度选择；若用户选 `fast`，repair 会保守钳到 `normal`
 - **TODO**: `CalibrationService.test_border()` 仍使用拖动方式（drag_path），后续需改为纯 click 并彻底删除 drag 相关代码。
 
 ---
