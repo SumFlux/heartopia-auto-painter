@@ -50,8 +50,8 @@ class CanvasCalibration:
         tl, tr, bl, br = self.top_left, self.top_right, self.bottom_left, self.bottom_right
         base_x = (1 - u) * (1 - v) * tl[0] + u * (1 - v) * tr[0] + (1 - u) * v * bl[0] + u * v * br[0]
         base_y = (1 - u) * (1 - v) * tl[1] + u * (1 - v) * tr[1] + (1 - u) * v * bl[1] + u * v * br[1]
-        screen_x = int(base_x) + self.offset_x + self.subpixel_phase_x
-        screen_y = int(base_y) + self.offset_y + self.subpixel_phase_y
+        screen_x = int(base_x + 0.5) + self.offset_x + self.subpixel_phase_x
+        screen_y = int(base_y + 0.5) + self.offset_y + self.subpixel_phase_y
         return screen_x, screen_y
 
     def compute_relative_corners(self, window_offset: Point) -> Dict[str, list[int]]:

@@ -1,7 +1,14 @@
 {
   "permissions": {
     "allow": [
-      "Bash(python3:*)"
+      "Bash(python3:*)",
+      "Bash(python:*)",
+      "Bash(do echo:*)",
+      "Bash(git add:*)",
+      "Bash(git switch:*)",
+      "Bash(find:*)",
+      "mcp__ide__getDiagnostics",
+      "Bash(git stash:*)"
     ]
   }
 }
